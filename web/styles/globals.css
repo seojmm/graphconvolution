@@ -1,0 +1,37 @@
+﻿@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: linear-gradient(145deg, #f7f8fb 0%, #e9ebf0 100%);
+}
+
+::selection {
+  background-color: #fee50055;
+}
+
+@layer base {
+  button {
+    font: inherit;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
