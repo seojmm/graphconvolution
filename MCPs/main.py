@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 
 # Domain 모델
-from Domain.model import (
+from MCPs.App.Domain.model import (
     UserRequest,
     OrchestratorResult,
     ScheduleRequest,
@@ -11,18 +11,18 @@ from Domain.model import (
 )
 
 # Agents
-from agents.constraint_extraction import ConstraintExtractionAgent
-from agents.knowledge_agent import KnowledgeAgent
-from agents.verification_agent import VerificationAgent
-from agents.action_agent import ActionAgent
+from MCPs.App.agents.constraint_extraction import ConstraintExtractionAgent
+from MCPs.App.agents.knowledge_agent import KnowledgeAgent
+from MCPs.App.agents.verification_agent import VerificationAgent
+from MCPs.App.agents.action_agent import ActionAgent
 
 # Ports (인프라 인터페이스 구현체)
-from ports.meeting_repository import InMemoryMeetingRepository  # 나중에 Neo4jMeetingRepository로 교체
-from ports.eta_service import KakaoMapEtaService                   # 나중에 KakaoMapEtaService로 교체
-from ports.calender_gateway import KakaoCalenderGateway         # 나중에 KakaoCalenderGateway로 교체
+from MCPs.App.ports.meeting_repository import InMemoryMeetingRepository  # 나중에 Neo4jMeetingRepository로 교체
+from MCPs.App.ports.eta_service import KakaoMapEtaService                   # 나중에 KakaoMapEtaService로 교체
+from MCPs.App.ports.calender_gateway import KakaoCalenderGateway         # 나중에 KakaoCalenderGateway로 교체
 
 # Orchestrator
-from orchestrator.orchestrator import Orchestrator
+from MCPs.App.orchestrator.orchestrator import Orchestrator
 
 
 app = FastAPI(

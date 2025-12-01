@@ -5,7 +5,7 @@
 from abc import ABC, abstractmethod
 from typing import List
 
-from Domain.model import Constraints, MeetingCandidate
+from ..Domain.model import Constraints, MeetingCandidate
 
 
 class MeetingRepository(ABC):

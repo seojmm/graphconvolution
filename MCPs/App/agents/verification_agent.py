@@ -1,6 +1,6 @@
 from typing import List
-from Domain.model import Constraints, MeetingCandidate, Participant
-from ports.eta_service import EtaService
+from ..Domain.model import Constraints, MeetingCandidate, Participant
+from ..ports.eta_service import EtaService
 
 #Verification Agent (Critic & Reflection)
 class VerificationAgent:

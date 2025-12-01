@@ -1,8 +1,8 @@
 import json
 import redis
 from typing import List
-from Domain.model import MeetingCandidate
-from ports.session_cache import SessionCache
+from ..Domain.model import MeetingCandidate
+from .session_cache import SessionCache
 
 class RedisSessionCache(SessionCache):
     def __init__(self, client: redis.Redis):
