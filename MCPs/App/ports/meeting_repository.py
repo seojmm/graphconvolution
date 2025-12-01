@@ -61,7 +61,8 @@ class InMemoryMeetingRepository(MeetingRepository):
             end_time = constraints.time_range.end_time or "21:00"
 
             candidate = MeetingCandidate(
-                candidate_id=f"c_{idx}",
+                id=f"c_{idx}",
+                request_id="req_dummy",
                 place_name=p["place_name"],
                 place_id=p["place_id"],
                 address=p["address"],
