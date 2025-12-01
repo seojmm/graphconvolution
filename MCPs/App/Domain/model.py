@@ -25,12 +25,20 @@ class BudgetPerPerson(BaseModel):
 class Constraints(BaseModel):
     people_count: Optional[int] = None
     area: List[str] = Field(default_factory=list)
+    meeting_point_strategy: str = "fixed"  # "fixed" | "midpoint"
+    departure_points: List[str] = Field(default_factory=list)  # participants.home_anchor
     date_range: DateRange = DateRange(type="single_day")
     time_range: TimeRange = TimeRange()
     budget_per_person: BudgetPerPerson = BudgetPerPerson()
     category_preferences: List[str] = Field(default_factory=list)
+    business_types: List[str] = Field(default_factory=list)
     hard_constraints: List[str] = Field(default_factory=list)
     soft_constraints: List[str] = Field(default_factory=list)
+    parking_required: Optional[bool] = None
+    open_until_late: Optional[bool] = None
+    max_travel_time: Optional[int] = None  # minutes
+    min_rating: Optional[float] = None
+    min_review_count: Optional[int] = None
     raw_normalized_text: str = ""
 
 

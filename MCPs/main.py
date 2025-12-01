@@ -1,5 +1,8 @@
 # main.py
 
+import os
+
+from dotenv import load_dotenv
 from fastapi import FastAPI
 
 # Domain 모델
@@ -25,6 +28,8 @@ from MCPs.App.ports.calender_gateway import KakaoCalenderGateway         # 나�
 from MCPs.App.orchestrator.orchestrator import Orchestrator
 
 
+load_dotenv()  # load KANANA_BASE_URL/KANANA_API_KEY from .env in project root
+
 app = FastAPI(
     title="Meeting Multi-Agent Orchestrator",
     version="0.1.0",
@@ -36,7 +41,7 @@ app = FastAPI(
 # ------------------------------------------------------
 
 # 1-1. 제약 추출 에이전트 (지금은 mock, 나중에 Kanana LLM 모드 추가)
-constraint_agent = ConstraintExtractionAgent(mode="mock")
+constraint_agent = ConstraintExtractionAgent(mode="llm")
 
 # 1-2. KnowledgeAgent가 사용할 MeetingRepository (지금은 InMemory 더미)
 meeting_repo = InMemoryMeetingRepository()
