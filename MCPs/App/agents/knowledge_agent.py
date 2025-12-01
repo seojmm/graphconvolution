@@ -1,7 +1,7 @@
 from typing import List
 
-from Domain.model import Constraints, MeetingCandidate
-from ports.meeting_repository import MeetingRepository
+from ..Domain.model import Constraints, MeetingCandidate
+from ..ports.meeting_repository import MeetingRepository
 
 
 #Knowledge Agent (Hybrid Search & Reasoner)

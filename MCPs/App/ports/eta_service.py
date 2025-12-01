@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List
-from Domain.model import Participant, MeetingCandidate, EtaStats
+from ..Domain.model import Participant, MeetingCandidate, EtaStats
 
 #KakaoMap MCP 에 직접 요청하는 레이어
 class EtaService(ABC):

@@ -1,7 +1,7 @@
 import re
 from typing import Optional
 
-from Domain.model import (
+from ..Domain.model import (
     Constraints,
     UserRequest,
     BudgetPerPerson,

@@ -1,7 +1,7 @@
 
 from abc import ABC, abstractmethod
 from typing import List
-from Domain.model import MeetingCandidate
+from ..Domain.model import MeetingCandidate
 
 
 class SessionCache(ABC):

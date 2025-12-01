@@ -1,8 +1,8 @@
-from Domain.model import UserRequest, OrchestratorResult, ScheduleResult, MeetingCandidate
-from agents.constraint_extraction import ConstraintExtractionAgent
-from agents.knowledge_agent import KnowledgeAgent
-from agents.verification_agent import VerificationAgent
-from agents.action_agent import ActionAgent
+from ..Domain.model import UserRequest, OrchestratorResult, ScheduleResult, MeetingCandidate
+from ..agents.constraint_extraction import ConstraintExtractionAgent
+from ..agents.knowledge_agent import KnowledgeAgent
+from ..agents.verification_agent import VerificationAgent
+from ..agents.action_agent import ActionAgent
 
 #AI Agent Orchestrator (Planner)
 class Orchestrator:

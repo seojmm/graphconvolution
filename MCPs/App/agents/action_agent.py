@@ -1,5 +1,5 @@
-from Domain.model import MeetingCandidate, UserRequest, ScheduleResult
-from ports.calender_gateway import CalenderGateway
+from ..Domain.model import MeetingCandidate, UserRequest, ScheduleResult
+from ..ports.calender_gateway import CalenderGateway
 
 
 #Action Agent (Execution)
