@@ -23,6 +23,7 @@ from MCPs.App.agents.action_agent import ActionAgent
 from MCPs.App.ports.meeting_repository import InMemoryMeetingRepository  # 나중에 Neo4jMeetingRepository로 교체
 from MCPs.App.ports.eta_service import KakaoMapEtaService                   # 나중에 KakaoMapEtaService로 교체
 from MCPs.App.ports.calender_gateway import KakaoCalenderGateway         # 나중에 KakaoCalenderGateway로 교체
+from MCPs.App.ports.midpoint_service import DummyMidpointService
 
 # Orchestrator
 from MCPs.App.orchestrator.orchestrator import Orchestrator
@@ -57,12 +58,16 @@ talk_calender_client = ...  # PlayMCP에서 제공하는 톡캘린더 MCP 클라
 calender_gateway = KakaoCalenderGateway(talk_calender_client=talk_calender_client)
 action_agent = ActionAgent(calender_gateway=calender_gateway)
 
-# 1-5. Orchestrator 조립
+# 1-5. MidpointService (중간지점 계산용 MCP 자리, 지금은 더미)
+midpoint_service = DummyMidpointService()
+
+# 1-6. Orchestrator 조립
 orchestrator = Orchestrator(
     constraint_agent=constraint_agent,
     knowledge_agent=knowledge_agent,
     verification_agent=verification_agent,
     action_agent=action_agent,
+    midpoint_service=midpoint_service,
 )
 
 
