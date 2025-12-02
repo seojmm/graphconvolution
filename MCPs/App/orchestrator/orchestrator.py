@@ -3,6 +3,7 @@ from ..agents.constraint_extraction import ConstraintExtractionAgent
 from ..agents.knowledge_agent import KnowledgeAgent
 from ..agents.verification_agent import VerificationAgent
 from ..agents.action_agent import ActionAgent
+from ..ports.midpoint_service import MidpointService
 
 #AI Agent Orchestrator (Planner)
 class Orchestrator:
@@ -20,16 +21,28 @@ class Orchestrator:
         knowledge_agent: KnowledgeAgent,
         verification_agent: VerificationAgent,
         action_agent: ActionAgent,
+        midpoint_service: MidpointService | None = None,
     ):
         self.constraint_agent = constraint_agent
         self.knowledge_agent = knowledge_agent
         self.verification_agent = verification_agent
         self.action_agent = action_agent
+        self.midpoint_service = midpoint_service
 
     def plan(self, user_request: UserRequest) -> OrchestratorResult:
         """후보 미팅 카드까지 생성하는 단계 (캘린더 생성 전)."""
         # 1) 자연어 -> 제약 추출
         constraints = self.constraint_agent.extract(user_request)
+
+        # 1-1) 중간지점 전략이면 MCP/지도 서비스로 meeting area 결정
+        if (
+            constraints.meeting_point_strategy == "midpoint"
+            and self.midpoint_service
+            and constraints.departure_points
+        ):
+            areas = self.midpoint_service.suggest_meeting_areas(constraints.departure_points)
+            if areas:
+                constraints.area = areas
 
         # 2) KnowledgeAgent로 후보 생성 (DB/그래프 사용)
         raw_candidates = self.knowledge_agent.propose_candidates(constraints)
