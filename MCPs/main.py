@@ -23,7 +23,6 @@ from MCPs.App.agents.action_agent import ActionAgent
 from MCPs.App.ports.meeting_repository import InMemoryMeetingRepository  # 나중에 Neo4jMeetingRepository로 교체
 from MCPs.App.ports.eta_service import KakaoMapEtaService                   # 나중에 KakaoMapEtaService로 교체
 from MCPs.App.ports.calender_gateway import KakaoCalenderGateway         # 나중에 KakaoCalenderGateway로 교체
-from MCPs.App.ports.midpoint_service import DummyMidpointService
 from MCPs.kakao_auth import router as kakao_auth_router
 # Orchestrator
 from MCPs.App.orchestrator.orchestrator import Orchestrator
