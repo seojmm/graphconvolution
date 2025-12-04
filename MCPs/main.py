@@ -26,6 +26,7 @@ from MCPs.App.ports.calender_gateway import KakaoCalenderGateway
 from MCPs.App.ports.midpoint_service import KakaoMapMidpointService, DummyMidpointService
  
 from MCPs.kakao_auth import router as kakao_auth_router
+from MCPs.kakao_mcp import PlayMCPClient
 # Orchestrator
 from MCPs.App.orchestrator.orchestrator import Orchestrator
 
@@ -56,9 +57,19 @@ knowledge_agent = KnowledgeAgent(meeting_repository=meeting_repo)
 eta_service = KakaoMapEtaService()
 verification_agent = VerificationAgent(eta_service=eta_service)
 
-# 1-4. ActionAgent가 사용할 CalenderGateway
-#     (지금은 Dummy, 나중에 KakaoCalenderGateway(talk_calender_client=...) 로 교체)
-calender_gateway = KakaoCalenderGateway()
+# 1-4. ActionAgent가 사용할 CalenderGateway (PlayMCP 톡캘린더 MCP 클라이언트 사용)
+play_mcp_token_url = os.getenv("PLAY_MCP_TOKEN_URL", "https://playauth.kakao.com/playmcp/oauth2/token")
+play_mcp_toolbox_url = os.getenv("PLAY_MCP_ENDPOINT", "https://playmcp.kakao.com/mcp")
+play_mcp_client_id = os.getenv("PLAY_MCP_CLIENT_ID")
+play_mcp_client_secret = os.getenv("PLAY_MCP_CLIENT_SECRET")
+
+talk_calender_client = PlayMCPClient(
+    base_url=play_mcp_toolbox_url or "",
+    token_url=play_mcp_token_url or "",
+    client_id=play_mcp_client_id,
+    client_secret=play_mcp_client_secret,
+)
+calender_gateway = KakaoCalenderGateway(talk_calender_client=talk_calender_client)
 action_agent = ActionAgent(calender_gateway=calender_gateway)
 
 # 1-5. MidpointService (중간지점 계산용 MCP 자리)
