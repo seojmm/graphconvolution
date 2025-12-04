@@ -61,8 +61,13 @@ verification_agent = VerificationAgent(eta_service=eta_service)
 calender_gateway = KakaoCalenderGateway()
 action_agent = ActionAgent(calender_gateway=calender_gateway)
 
-# 1-5. MidpointService (중간지점 계산용 MCP 자리, 지금은 더미)
-midpoint_service = DummyMidpointService()
+# 1-5. MidpointService (중간지점 계산용 MCP 자리)
+# 환경변수에 카카오 REST 키가 있으면 실제 호출, 아니면 더미 사용
+kakao_rest_key = os.getenv("KAKAO_REST_API_KEY")
+if kakao_rest_key:
+    midpoint_service = KakaoMapMidpointService(rest_api_key=kakao_rest_key)
+else:
+    midpoint_service = DummyMidpointService()
 
 # 1-6. Orchestrator 조립
 orchestrator = Orchestrator(
