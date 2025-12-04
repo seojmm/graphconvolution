@@ -24,7 +24,7 @@ from MCPs.App.ports.meeting_repository import InMemoryMeetingRepository  # 나�
 from MCPs.App.ports.eta_service import KakaoMapEtaService                   # 나중에 KakaoMapEtaService로 교체
 from MCPs.App.ports.calender_gateway import KakaoCalenderGateway         # 나중에 KakaoCalenderGateway로 교체
 from MCPs.App.ports.midpoint_service import DummyMidpointService
-
+from MCPs.kakao_auth import router as kakao_auth_router
 # Orchestrator
 from MCPs.App.orchestrator.orchestrator import Orchestrator
 
@@ -36,6 +36,9 @@ app = FastAPI(
     version="0.1.0",
     description="자연어 회식/모임 요청을 받아 후보 장소/시간을 추천하는 에이전트 오케스트레이션 서버",
 )
+
+# 카카오 OAuth 관련 엔드포인트 연결
+app.include_router(kakao_auth_router, prefix="/auth", tags=["kakao-auth"])
 
 # ------------------------------------------------------
 # 1) 각 에이전트/포트 인스턴스 생성 (wiring)
@@ -54,8 +57,7 @@ verification_agent = VerificationAgent(eta_service=eta_service)
 
 # 1-4. ActionAgent가 사용할 CalenderGateway
 #     (지금은 Dummy, 나중에 KakaoCalenderGateway(talk_calender_client=...) 로 교체)
-talk_calender_client = ...  # PlayMCP에서 제공하는 톡캘린더 MCP 클라이언트 초기화 코드
-calender_gateway = KakaoCalenderGateway(talk_calender_client=talk_calender_client)
+calender_gateway = KakaoCalenderGateway()
 action_agent = ActionAgent(calender_gateway=calender_gateway)
 
 # 1-5. MidpointService (중간지점 계산용 MCP 자리, 지금은 더미)

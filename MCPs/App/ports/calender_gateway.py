@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional
 from ..Domain.model import ScheduleResult, MeetingCandidate, UserRequest
-
+import requests  # <= 새로 추가
+from MCPs.kakao_auth import load_access_token  # <= 새로 추가
+import json
 
 class CalenderGateway(ABC):
     """
@@ -40,18 +42,17 @@ class DummyCalenderGateway(CalenderGateway):
 
 # *** 여기부터가 실제 톡캘린더 MCP 연동용 ***
 class KakaoCalenderGateway(CalenderGateway):
-    """톡캘린더 MCP 도구를 감싸는 어댑터.
+    """
+    톡캘린더 REST API를 직접 호출하는 구현체.
 
-    - 내부적으로는 PlayMCP에서 제공하는 TalkCalender 도구를 호출
-    - ActionAgent는 MCP 세부사항을 몰라도 되고, 이 클래스만 사용
+    - 내부적으로는 POST https://kapi.kakao.com/v2/api/calendar/create/event 를 사용
+    - ActionAgent / Orchestrator 입장에서는 그냥 "일정 만들어주는 함수"로 쓰면 됨
+
     """
 
-    def __init__(self, talk_calender_client):
-        """
-        talk_calender_client: PlayMCP에서 제공하는 톡캘린더 MCP 클라이언트
-          (예: talk_calender_client.call("CreateEvent", payload) 형태)
-        """
-        self.client = talk_calender_client
+    def __init__(self, default_calendar_id: str = "primary"):
+        # 기본적으로는 유저의 기본 캘린더(primary)에 생성
+        self.default_calendar_id = default_calendar_id
 
     def create_event(
         self,
@@ -59,20 +60,56 @@ class KakaoCalenderGateway(CalenderGateway):
         candidate: MeetingCandidate,
         attendees: Optional[List[str]] = None,
     ) -> ScheduleResult:
-        payload = {
-            "title": f"[약속] {candidate.place_name}",
-            "start_time": candidate.start_time,
-            "end_time": candidate.end_time,
-            "location": candidate.address,
-            "attendees": attendees or [p.participant_id for p in user_request.participants],
-            "description": user_request.user_query,
+        # 1) OAuth에서 발급받은 access_token 읽기
+        access_token = load_access_token()
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
         }
 
-        # 실제 MCP 호출 (구체적인 호출 방식은 PlayMCP SDK 스펙에 맞게 수정)
-        result = self.client.call("CreateEvent", payload)
+        # TODO: UserRequest에 별도의 calendar_id 필드를 나중에 추가하고 싶으면 여기서 우선순위로 사용
+        calendar_id = getattr(user_request, "calendar_id", None) or self.default_calendar_id
+
+        # 2) 톡캘린더 REST API 스펙에 맞게 event body 구성
+        #    공식 문서: POST /v2/api/calendar/create/event, body: calendar_id + event(JSON):contentReference[oaicite:4]{index=4}
+        event_body = {
+            "title": candidate.place_name,  # 일정 제목
+            "time": {
+                "start_at": candidate.start_time,  # 현재는 ISO 문자열 그대로 사용 (필요하면 UTC 변환)
+                "end_at": candidate.end_time,
+                "time_zone": "Asia/Seoul",
+                "all_day": False,
+                "lunar": False,
+            },
+            "location": {
+                "name": candidate.place_name,
+                "address": candidate.address,
+            },
+            "description": user_request.user_query,
+            # reminders, color 등 추가 옵션이 필요하면 여기서 더 채워 넣으면 됨
+        }
+
+        data = {
+            "calendar_id": calendar_id,
+            "event": json.dumps(event_body, ensure_ascii=False),
+        }
+
+        # 3) 카카오 톡캘린더 "일반 일정 생성" API 호출
+        resp = requests.post(
+            "https://kapi.kakao.com/v2/api/calendar/create/event",
+            headers=headers,
+            data=data,
+            timeout=5,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+
+        # 응답은 { "event_id": "..." } 형태:contentReference[oaicite:5]{index=5}
+        event_id = body["event_id"]
 
         return ScheduleResult(
             status="created",
-            event_id=result["event_id"],
+            event_id=event_id,
             candidate_id=candidate.id,
         )
