@@ -47,3 +47,28 @@ UserRequest(user_query="다음 주 월요일 저녁 6시에 회식할건데. 총
 
 # 설계 예시
 - ports/meeting_repository_neo4j.py
+
+
+# schedule 예시
+'''
+{
+  "user_request": {
+    "user_query": "12월 10일 오후 6시에 강남에서 모임 잡아줘",
+    "user_id": "user-123",
+    "participants": [
+      { "participant_id": "user1", "name": "Alice" },
+      { "participant_id": "user2", "name": "Bob" }
+    ]
+  },
+  "selected_candidate": {
+    "id": "cand-1",
+    "request_id": "req-1",
+    "place_name": "가츠시 건대점",
+    "place_id": "place-123",
+    "address": "서울 광진구 광나루로 418",
+    "start_time": "2025-12-10T18:00:00",
+    "end_time": "2025-12-10T19:00:00",
+    "reasoning": ""
+  }
+}
+'''
