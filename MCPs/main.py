@@ -1,6 +1,8 @@
 # main.py
 
 import os
+import logging
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -25,22 +27,33 @@ from MCPs.App.ports.eta_service import KakaoMapEtaService
 from MCPs.App.ports.calender_gateway import KakaoCalenderGateway
 from MCPs.App.ports.midpoint_service import KakaoMapMidpointService, DummyMidpointService
  
-from MCPs.kakao_auth import router as kakao_auth_router
 from MCPs.kakao_mcp import PlayMCPClient
 # Orchestrator
 from MCPs.App.orchestrator.orchestrator import Orchestrator
 
 
 load_dotenv()  # load KANANA_BASE_URL/KANANA_API_KEY from .env in project root
+# 기본 로깅 레벨 설정 (INFO 이상 출력)
+logging.basicConfig(level=logging.INFO)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """서버 시작 시 PlayMCP 세션 초기화."""
+    try:
+        talk_calender_client.initialize(client_name="graphconvolution", client_version="0.1.0")
+        logging.info("PlayMCP initialize completed.")
+    except Exception as exc:
+        logging.warning("PlayMCP initialize failed: %s", exc)
+    yield
+    # 종료 시 특별한 정리 작업 없음
+
 
 app = FastAPI(
     title="Meeting Multi-Agent Orchestrator",
     version="0.1.0",
     description="자연어 회식/모임 요청을 받아 후보 장소/시간을 추천하는 에이전트 오케스트레이션 서버",
+    lifespan=lifespan,
 )
-
-# 카카오 OAuth 관련 엔드포인트 연결
-app.include_router(kakao_auth_router, prefix="/auth", tags=["kakao-auth"])
 
 # ------------------------------------------------------
 # 1) 각 에이전트/포트 인스턴스 생성 (wiring)
@@ -58,16 +71,14 @@ eta_service = KakaoMapEtaService()
 verification_agent = VerificationAgent(eta_service=eta_service)
 
 # 1-4. ActionAgent가 사용할 CalenderGateway (PlayMCP 톡캘린더 MCP 클라이언트 사용)
-play_mcp_token_url = os.getenv("PLAY_MCP_TOKEN_URL", "https://playauth.kakao.com/playmcp/oauth2/token")
-play_mcp_toolbox_url = os.getenv("PLAY_MCP_ENDPOINT", "https://playmcp.kakao.com/mcp")
-play_mcp_client_id = os.getenv("PLAY_MCP_CLIENT_ID")
-play_mcp_client_secret = os.getenv("PLAY_MCP_CLIENT_SECRET")
+play_mcp_toolbox_url = (
+    os.getenv("PLAY_MCP_ENDPOINT")
+    or os.getenv("PLAY_MCP_TOOLBOX_URL")
+    or "https://playmcp.kakao.com/mcp"
+)
 
 talk_calender_client = PlayMCPClient(
     base_url=play_mcp_toolbox_url or "",
-    token_url=play_mcp_token_url or "",
-    client_id=play_mcp_client_id,
-    client_secret=play_mcp_client_secret,
 )
 calender_gateway = KakaoCalenderGateway(talk_calender_client=talk_calender_client)
 action_agent = ActionAgent(calender_gateway=calender_gateway)
