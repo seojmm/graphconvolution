@@ -21,7 +21,7 @@ from .models import (
     ExtractResponse,
     KakaoGeocodeResult,
     KakaoPlace,
-    Place,
+    PlaceData,
     PlacesResponse,
 )
 
@@ -66,7 +66,7 @@ def _ensure_llm_key() -> None:
         raise HTTPException(status_code=500, detail="KANANA_API_KEY is not configured.")
 
 
-def _collect_places(region: str, district: str, categories: List[str]) -> List[Place]:
+def _collect_places(region: str, district: str, categories: List[str]) -> List[PlaceData]:
     _ensure_api_key()
     _validate_inputs(region, district, categories)
 
@@ -186,11 +186,6 @@ def _collect_daum_contents(query: str, sort: str, page: int, size: int) -> tuple
 
     combined = "\n\n".join(contents).strip()
     return combined, source_counts
-
-
-@app.get("/health")
-async def health_check():
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
 
 
 @app.get("/regions")
@@ -353,8 +348,8 @@ async def extract_information(
         "너는 한 장소(쿼리에 포함된 상호와 주소)에 대한 정보만 추출하는 도우미다. "
         "입력은 Daum web/blog/cafe 검색의 내용 일부이며 HTML 태그가 제거된 텍스트다. "
         "쿼리에 포함된 상호/주소와 직접 관련 없는 다른 장소, 사람, 숫자는 모두 무시한다. "
-        "반드시 JSON 하나만 출력한다. 최소로 parking, breaktime, openingHours, closedDays, menus, notes 여섯 키를 포함해야 하며, "
-        "이 여섯 키는 문자열로 채운다(정보가 없으면 빈 문자열). 다른 유용한 정보가 있으면 추가 키로 포함해도 된다. "
+        "반드시 JSON 하나만 출력한다. 최소로 parking, breaktime, openingHours, closedDays, priceRange, menus, notes 키를 포함해야 하며, "
+        "이 키는 문자열로 채운다(정보가 없으면 빈 문자열). 다른 유용한 정보가 있으면 추가 키로 포함해도 된다. "
         "추가 설명 문구 없이 JSON만 반환한다."
     )
     prompt = (

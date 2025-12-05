@@ -1,11 +1,9 @@
-from fastapi import FastAPI
+"""FastAPI entrypoint for the Kakao proxy service."""
+
 import uvicorn
 
-app = FastAPI()
+from app import app
 
-@app.get("/")
-def hello() :
-	return "Hello, World!"
 
-if __name__ == "__main__" :
-	uvicorn.run("main:app", reload=True)
+if __name__ == "__main__":
+    uvicorn.run("app:app", reload=True)

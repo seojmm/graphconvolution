@@ -40,10 +40,6 @@ class KakaoDataCollector:
                 'name': '서울',
                 'districts': ['강남구', '서초구', '마포구', '홍대', '이태원', '명동', '동대문', '종로구', '용산구', '성동구', '광진구', '중구', '중랑구', '노원구', '도봉구', '강북구', '성북구', '강서구', '양천구', '영등포구', '구로구', '금천구', '동작구', '관악구', '서대문구', '은평구']
             },
-            'gyeonggi': {
-                'name': '경기도',
-                'districts': ['분당구', '광교', '판교', '일산', '과천', '안양', '수원', '성남', '용인', '고양', '의정부', '남양주', '하남', '광주', '여주', '이천', '안성', '평택', '오산', '화성', '시흥', '부천', '광명', '군포', '의왕', '안산', '양평', '가평', '연천', '포천', '동두천', '구리']
-            }
         }
         
         # 카테고리 매핑
@@ -60,7 +56,6 @@ class KakaoDataCollector:
         # 수집된 데이터
         self.collected_data = {
             'seoul': [],
-            'gyeonggi': []
         }
 
     def collect_kakao_data(self, region: str, district: str, category: str) -> List[Dict]:
@@ -70,7 +65,7 @@ class KakaoDataCollector:
         restaurants = []
         page = 1
         
-        while page <= 1:  # 최대 1페이지까지만 수집
+        while page <= 3:  # 최대 3페이지까지만 수집
             try:
                 url = "https://dapi.kakao.com/v2/local/search/keyword.json"
                 headers = {
@@ -152,37 +147,37 @@ class KakaoDataCollector:
         
         return unique_restaurants
 
-    def _enrich_restaurant_data(self, restaurant: Dict) -> Dict:
-        """식당 데이터 보강"""
-        # 평점 랜덤 생성 (3.0 ~ 5.0)
-        restaurant['rating'] = round(np.random.uniform(3.0, 5.0), 1)
+    # def _enrich_restaurant_data(self, restaurant: Dict) -> Dict:
+    #     """식당 데이터 보강"""
+    #     # 평점 랜덤 생성 (3.0 ~ 5.0)
+    #     restaurant['rating'] = round(np.random.uniform(3.0, 5.0), 1)
         
-        # 리뷰 수 랜덤 생성 (0 ~ 500)
-        restaurant['reviewCount'] = np.random.randint(0, 500)
+    #     # 리뷰 수 랜덤 생성 (0 ~ 500)
+    #     restaurant['reviewCount'] = np.random.randint(0, 500)
         
-        # 좋아요 수 랜덤 생성 (0 ~ 100)
-        restaurant['likeCount'] = np.random.randint(0, 100)
+    #     # 좋아요 수 랜덤 생성 (0 ~ 100)
+    #     restaurant['likeCount'] = np.random.randint(0, 100)
         
-        # 방문 수 랜덤 생성 (0 ~ 1000)
-        restaurant['visitCount'] = np.random.randint(0, 1000)
+    #     # 방문 수 랜덤 생성 (0 ~ 1000)
+    #     restaurant['visitCount'] = np.random.randint(0, 1000)
         
-        # 추천 여부 (평점 4.0 이상이면 추천)
-        restaurant['isRecommended'] = restaurant['rating'] >= 4.0
+    #     # 추천 여부 (평점 4.0 이상이면 추천)
+    #     restaurant['isRecommended'] = restaurant['rating'] >= 4.0
         
-        # 태그 생성
-        tags = []
-        if restaurant['rating'] >= 4.5:
-            tags.append('인기')
-        if restaurant['visitCount'] > 500:
-            tags.append('많이 찾는')
-        if restaurant['category'] in ['한식', '중식', '일식']:
-            tags.append('전통')
-        if restaurant['category'] == '카페':
-            tags.append('분위기 좋은')
+    #     # 태그 생성
+    #     tags = []
+    #     if restaurant['rating'] >= 4.5:
+    #         tags.append('인기')
+    #     if restaurant['visitCount'] > 500:
+    #         tags.append('많이 찾는')
+    #     if restaurant['category'] in ['한식', '중식', '일식']:
+    #         tags.append('전통')
+    #     if restaurant['category'] == '카페':
+    #         tags.append('분위기 좋은')
         
-        restaurant['tags'] = tags
+    #     restaurant['tags'] = tags
         
-        return restaurant
+    #     return restaurant
 
     def collect_all_data(self):
         """모든 데이터 수집"""

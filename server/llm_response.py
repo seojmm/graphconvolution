@@ -1,5 +1,6 @@
 ﻿import logging
 import os
+
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -11,20 +12,48 @@ logger = logging.getLogger(__name__)
 class LLMResponse:
     def __init__(self):
         self.kanana_api_key = os.getenv("KANANA_API_KEY")
+        self.kanana_base_url = os.getenv("KANANA_BASE_URL")
+        self.model_id = os.getenv("KANANA_MODEL_ID")  # 선택: 고정 모델 지정
+
+        if not self.kanana_api_key:
+            logger.warning("KANANA_API_KEY is not configured. LLM calls will fail.")
+
+        if not self.kanana_base_url:
+            logger.warning("KANANA_BASE_URL is not configured. Using default OpenAI base URL.")
+
         self.client = OpenAI(
-            base_url="https://kanana-2-30b-a3b-s7nyu.a2s-endpoint.kr-central-2.kakaocloud.com/openai/v1",
+            base_url=self.kanana_base_url or None,
             api_key=self.kanana_api_key,
         )
+
+        # 모델 ID 미지정 시, 초기화 시점에 한 번만 조회
+        if self.kanana_api_key and not self.model_id:
+            try:
+                models = self.client.models.list()
+                if models.data:
+                    self.model_id = models.data[0].id
+                    logger.info("Discovered Kanana model", extra={"model": self.model_id})
+                else:
+                    logger.error("No models returned from Kanana backend.")
+            except Exception:
+                logger.exception("Failed to list models from Kanana backend.")
+                self.model_id = None
 
     def get_response(self, prompt: str) -> str:
         if not self.kanana_api_key:
             raise ValueError("KANANA_API_KEY is not configured.")
 
-        model_id = self.client.models.list().data[0].id
-        logger.info("LLM request start", extra={"prompt_len": len(prompt), "model": model_id})
+        if not self.model_id:
+            raise ValueError("KANANA_MODEL_ID is not configured and automatic discovery failed.")
+
+        logger.info(
+            "LLM request start",
+            extra={"prompt_len": len(prompt), "model": self.model_id},
+        )
+
         try:
             response = self.client.chat.completions.create(
-                model=model_id,
+                model=self.model_id,
                 messages=[
                     {
                         "role": "system",
@@ -46,7 +75,7 @@ class LLMResponse:
                 ],
                 temperature=0,
             )
-        except Exception as exc:
+        except Exception:
             logger.exception("LLM request failed")
             raise
 
