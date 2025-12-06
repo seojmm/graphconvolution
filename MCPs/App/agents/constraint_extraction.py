@@ -17,112 +17,18 @@ from ..Domain.model import (
 class ConstraintExtractionAgent:
     def __init__(
         self,
-        mode: str = "mock",
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
     ):
-        if mode not in {"mock", "llm"}:
-            raise ValueError("mode must be 'mock' or 'llm'")
-        self.mode = mode
-
-        # secrets are sourced from env by default to avoid hard-coding
         self.base_url = base_url or os.getenv("KANANA_BASE_URL")
         self.api_key = api_key or os.getenv("KANANA_API_KEY")
-        self.client = None
-        if self.mode == "llm":
-            if not self.base_url or not self.api_key:
-                raise ValueError("KANANA_BASE_URL/KANANA_API_KEY must be set for llm mode")
-            # Kanana와 호환되는 openai 클라이언트 생성
-            self.client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+        if not self.base_url or not self.api_key:
+            raise ValueError("KANANA_BASE_URL/KANANA_API_KEY must be set")
+        # Kanana와 호환되는 openai 클라이언트 생성
+        self.client = OpenAI(base_url=self.base_url, api_key=self.api_key)
 
     def extract(self, user_request: UserRequest) -> Constraints:
-        if self.mode == "mock":
-            return self._extract_mock(user_request)
         return self._extract_with_llm(user_request)
-
-    # ------------------------------
-    # mock 구현: 아주 단순한 규칙 기반 파서
-    # ------------------------------
-    def _extract_mock(self, user_request: UserRequest) -> Constraints:
-        text = user_request.user_query
-
-        # people_count
-        people_count: Optional[int] = None
-        m_people = re.search(r"(\d+)\s*명", text)
-        if m_people:
-            people_count = int(m_people.group(1))
-
-        # budget_per_person.max
-        budget_max: Optional[int] = None
-        m_budget = re.search(r"(\d+)\s*만\s*원", text)
-        if m_budget:
-            num = m_budget.group(1)
-            # "2만원" -> 20000 가정
-            budget_max = int(num) * 10000
-
-        # area (지명 키워드 기반)
-        area_keywords = ["강남", "강남역", "역삼", "선릉", "잠실", "홍대", "신촌"]
-        areas = [kw for kw in area_keywords if kw in text]
-
-        # date_range: 상대 날짜는 여기선 하드코딩 예시
-        date_range = DateRange(type="single_day")
-        if "금요일" in text:
-            # TODO: 실제 구현에서는 호출 시점 기준 "이번 주 금요일" 계산
-            date_range.start_date = "2025-11-28"
-            date_range.end_date = "2025-11-28"
-
-        # time_range
-        time_range = TimeRange()
-        if "저녁" in text and time_range.start_time is None:
-            time_range.start_time = "18:00"
-            time_range.end_time = "21:00"
-
-        m_time = re.search(r"(\d+)\s*시", text)
-        if m_time:
-            hour = int(m_time.group(1))
-            time_range.start_time = f"{hour:02d}:00"
-            time_range.end_time = f"{(hour + 2):02d}:00"
-
-        # category_preferences
-        category_preferences = []
-        if "회식" in text:
-            category_preferences.append("회식")
-        if "고기" in text:
-            category_preferences.append("고기")
-        if "술집" in text or "술" in text:
-            category_preferences.append("술집")
-
-        hard_constraints = []
-        soft_constraints = []
-
-        if people_count is not None:
-            hard_constraints.append("people_count")
-        if budget_max is not None:
-            hard_constraints.append("budget_per_person.max")
-        if date_range.start_date is not None:
-            hard_constraints.append("date_range")
-        if time_range.start_time is not None:
-            hard_constraints.append("time_range")
-        if areas:
-            hard_constraints.append("area")
-
-        if "조용" in text:
-            soft_constraints.append("조용한 분위기")
-        if "가성비" in text:
-            soft_constraints.append("가성비 좋은 곳")
-
-        constraints = Constraints(
-            people_count=people_count,
-            area=areas,
-            date_range=date_range,
-            time_range=time_range,
-            budget_per_person=BudgetPerPerson(max=budget_max, currency="KRW"),
-            category_preferences=category_preferences,
-            hard_constraints=hard_constraints,
-            soft_constraints=soft_constraints,
-            raw_normalized_text=text,
-        )
-        return constraints
 
     # ------------------------------
     # LLM 연동 설계 (나중에 구현)
@@ -148,6 +54,7 @@ class ConstraintExtractionAgent:
         - case 1: 사용자가 특정 만남 지역을 명시한 경우 → meeting_point_strategy는 "fixed", area는 그 지역 리스트.
         - case 2: 명시된 만남 지역이 없고 참석자 출발지(home_anchor)가 여러 개 있는 경우 →
                   meeting_point_strategy는 "midpoint", departure_points에 출발지를 채우고 area는 비워둠 (중간지점 탐색을 downstream에서 수행).
+        - 출발지는 역 이름이 아니어도 됩니다. 사용자가 언급한 출발 위치(동/건물/랜드마크 등)를 그대로 departure_points에 담으세요.
 
         추출 대상 필드(Constraints 모델과 매핑):
         {
@@ -217,8 +124,17 @@ class ConstraintExtractionAgent:
         ]:
             if constraints_data.get(key) is None:
                 constraints_data[key] = []
+        # LLM이 찾아준 출발지 우선 사용, 없으면 기존 participants에서 가져온 값으로 채움
         if not constraints_data.get("departure_points"):
             constraints_data["departure_points"] = departure_points
+        # participants에 home_anchor가 비어 있으면 departure_points 순서대로 채워 넣음
+        dp_list = constraints_data.get("departure_points") or []
+        dp_idx = 0
+        for p in user_request.participants:
+            if not p.home_anchor and dp_idx < len(dp_list):
+                p.home_anchor = dp_list[dp_idx]
+                dp_idx += 1
+
         constraints_data.setdefault("budget_per_person", {})  # 안전하게 기본값 준비
 
         return Constraints(**constraints_data)

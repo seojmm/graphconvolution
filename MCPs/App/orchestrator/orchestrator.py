@@ -57,6 +57,7 @@ class Orchestrator:
         return OrchestratorResult(
             constraints=constraints,
             candidates=evaluated_candidates,
+            participants=user_request.participants,
         )
 
     def schedule(
