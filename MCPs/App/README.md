@@ -56,8 +56,8 @@ UserRequest(user_query="다음 주 월요일 저녁 6시에 회식할건데. 총
     "user_query": "12월 10일 오후 6시에 강남에서 모임 잡아줘",
     "user_id": "user-123",
     "participants": [
-      { "participant_id": "user1", "name": "Alice" },
-      { "participant_id": "user2", "name": "Bob" }
+      { "participant_id": "user1", "name": "Alice", "home_anchor": "건대입구역" },
+      { "participant_id": "user2", "name": "Bob", "home_anchor": "서울대입구역" }
     ]
   },
   "selected_candidate": {

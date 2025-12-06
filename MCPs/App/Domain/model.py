@@ -64,6 +64,7 @@ class EtaStats(BaseModel):
 class OrchestratorResult(BaseModel):
     constraints: Constraints
     candidates: List[MeetingCandidate]
+    participants: List[Participant] = Field(default_factory=list)
 
 
 class ScheduleRequest(BaseModel):
