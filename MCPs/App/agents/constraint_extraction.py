@@ -11,6 +11,7 @@ from ..Domain.model import (
     BudgetPerPerson,
     DateRange,
     TimeRange,
+    Participant,
 )
 
 
@@ -127,13 +128,46 @@ class ConstraintExtractionAgent:
         # LLM이 찾아준 출발지 우선 사용, 없으면 기존 participants에서 가져온 값으로 채움
         if not constraints_data.get("departure_points"):
             constraints_data["departure_points"] = departure_points
-        # participants에 home_anchor가 비어 있으면 departure_points 순서대로 채워 넣음
+        # participants 리스트 보강: home_anchor를 departure_points와 1:1 매핑 시도
         dp_list = constraints_data.get("departure_points") or []
-        dp_idx = 0
-        for p in user_request.participants:
-            if not p.home_anchor and dp_idx < len(dp_list):
-                p.home_anchor = dp_list[dp_idx]
-                dp_idx += 1
+        # "string" 같은 placeholder만 있을 때는 출발지 정보가 없는 것으로 처리
+        if dp_list and all(v == "string" for v in dp_list):
+            dp_list = []
+            constraints_data["departure_points"] = []
+        participants = user_request.participants or []
+
+        # 1) participants가 비어 있으면 departure_points 길이에 맞춰 생성
+        if not participants and dp_list:
+            participants = [
+                Participant(participant_id=f"p{idx+1}", name=None, home_anchor=anchor)
+                for idx, anchor in enumerate(dp_list)
+            ]
+
+        # 2) people_count 기반으로 필요한 수만큼 채우기
+        desired_count = constraints_data.get("people_count") or len(participants) or len(dp_list)
+        if desired_count > len(participants):
+            start_idx = len(participants)
+            for idx in range(start_idx, desired_count):
+                anchor = dp_list[idx] if idx < len(dp_list) else None
+                participants.append(
+                    Participant(participant_id=f"p{idx+1}", name=None, home_anchor=anchor)
+                )
+
+        # 3) participants 수가 있는데 anchor가 비어 있으면 dp_list 순서대로 채움
+        for idx, p in enumerate(participants):
+            if dp_list and idx < len(dp_list):
+                anchor = dp_list[idx]
+                if not p.home_anchor or p.home_anchor == "string":
+                    p.home_anchor = anchor
+            # placeholder 정리
+            if p.participant_id == "string":
+                p.participant_id = f"p{idx+1}"
+            if p.name == "string":
+                p.name = None
+            if p.home_anchor == "string":
+                p.home_anchor = None
+
+        user_request.participants = participants
 
         constraints_data.setdefault("budget_per_person", {})  # 안전하게 기본값 준비
 
