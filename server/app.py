@@ -23,12 +23,18 @@ from .models import (
     KakaoPlace,
     PlaceData,
     PlacesResponse,
+    OrchestratorResult,
+    ScheduleResult,
+    ScheduleRequest,
+    UserRequest,
 )
+from .orchestrator_components import build_orchestrator
 
 
 logger = logging.getLogger(__name__)
 collector = KakaoDataCollector()
 llm_client = LLMResponse()
+orchestrator = build_orchestrator()
 
 app = FastAPI(title="Kakao Places Proxy", version="0.1.0")
 
@@ -75,8 +81,9 @@ def _collect_places(region: str, district: str, categories: List[str]) -> List[P
         collected.extend(collector.collect_kakao_data(region, district, category))
 
     unique = collector._deduplicate_restaurants(collected)
-    enriched = [collector._enrich_restaurant_data(item) for item in unique]
-    return enriched
+    # Validate/normalize against the response schema early
+    validated: List[PlaceData] = [PlaceData(**item) for item in unique]
+    return validated
 
 
 def _kakao_request(path: str, params: dict) -> dict:
@@ -387,6 +394,23 @@ async def extract_information(
     )
 
 
+# ------------------------------
+# MCP Orchestrator endpoints
+# ------------------------------
+
+
+@app.post("/orchestrate", response_model=OrchestratorResult)
+async def orchestrate(body: UserRequest):
+    """Plan meeting candidates using the MCP orchestrator."""
+    return orchestrator.plan(body)
+
+
+@app.post("/schedule", response_model=ScheduleResult)
+async def schedule_meeting(body: ScheduleRequest):
+    """Schedule a selected meeting candidate (demo implementation)."""
+    return orchestrator.schedule(body.user_request, body.selected_candidate)
+
+
 @app.on_event("startup")
 def log_configuration():
     if collector.kakao_api_key:
@@ -396,7 +420,3 @@ def log_configuration():
 
 
 __all__ = ["app"]
-
-
-
-

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import requests
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -85,7 +86,7 @@ def fetch_all_seoul(limit_per_category: Optional[int] = None) -> List[Dict[str, 
     categories = list(collector.category_mapping.keys())
     all_places: List[Dict[str, Any]] = []
 
-    for district in districts[:10]:
+    for district in districts[:1]:
         district_raw: List[Dict[str, Any]] = []
         for category in categories:
             chunk = collector.collect_kakao_data("seoul", district, category)
@@ -96,6 +97,22 @@ def fetch_all_seoul(limit_per_category: Optional[int] = None) -> List[Dict[str, 
 
     logger.info("Collected all Seoul districts", extra={"total": len(all_places)})
     return all_places
+
+
+def _fetch_extract_info(base_url: str, query: str) -> Dict[str, Any]:
+    """Call the running FastAPI '/extract' endpoint to enrich a place."""
+    url = f"{base_url.rstrip('/')}/extract"
+    try:
+        resp = requests.get(url, params={"query": query}, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        llm_result = data.get("llmResult") or {}
+        if isinstance(llm_result, dict):
+            return llm_result
+        return {}
+    except Exception as exc:
+        logger.warning("Failed to fetch extract info", extra={"query": query, "error": str(exc)})
+        return {}
 
 
 def _rename_for_graph(place: Dict[str, Any]) -> Dict[str, Any]:
@@ -115,7 +132,15 @@ def _rename_for_graph(place: Dict[str, Any]) -> Dict[str, Any]:
 
 async def seed_places(graph: Graphiti, places: List[Dict[str, Any]], description: str) -> None:
     count = 0
+    fastapi_base = os.getenv("FASTAPI_BASE_URL", "http://localhost:8000")
     for place in places:
+        # Enrich with Daum/LLM info via running FastAPI service
+        query_text = f"{place.get('name', '')} {place.get('address', '')}".strip()
+        if query_text:
+            extracted = _fetch_extract_info(fastapi_base, query_text)
+            if extracted:
+                place.update(extracted)
+
         payload = _rename_for_graph(place)
         await graph.add_episode(
             name=payload.get("place_name") or "place",

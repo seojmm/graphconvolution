@@ -13,7 +13,7 @@ class LLMResponse:
     def __init__(self):
         self.kanana_api_key = os.getenv("KANANA_API_KEY")
         self.kanana_base_url = os.getenv("KANANA_BASE_URL")
-        self.model_id = os.getenv("KANANA_MODEL_ID")  # 선택: 고정 모델 지정
+        self.model_id = os.getenv("KANANA_MODEL_ID")  # optional: fixed model id
 
         if not self.kanana_api_key:
             logger.warning("KANANA_API_KEY is not configured. LLM calls will fail.")
@@ -21,30 +21,18 @@ class LLMResponse:
         if not self.kanana_base_url:
             logger.warning("KANANA_BASE_URL is not configured. Using default OpenAI base URL.")
 
+        # Do not call models.list() at import time; rely on explicit model id to avoid startup failures.
         self.client = OpenAI(
             base_url=self.kanana_base_url or None,
             api_key=self.kanana_api_key,
         )
-
-        # 모델 ID 미지정 시, 초기화 시점에 한 번만 조회
-        if self.kanana_api_key and not self.model_id:
-            try:
-                models = self.client.models.list()
-                if models.data:
-                    self.model_id = models.data[0].id
-                    logger.info("Discovered Kanana model", extra={"model": self.model_id})
-                else:
-                    logger.error("No models returned from Kanana backend.")
-            except Exception:
-                logger.exception("Failed to list models from Kanana backend.")
-                self.model_id = None
 
     def get_response(self, prompt: str) -> str:
         if not self.kanana_api_key:
             raise ValueError("KANANA_API_KEY is not configured.")
 
         if not self.model_id:
-            raise ValueError("KANANA_MODEL_ID is not configured and automatic discovery failed.")
+            raise ValueError("KANANA_MODEL_ID is not configured. Set it in the environment.")
 
         logger.info(
             "LLM request start",

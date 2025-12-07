@@ -9,7 +9,6 @@ import requests
 import json
 import time
 import pandas as pd
-import numpy as np
 from datetime import datetime
 from typing import Dict, List, Optional
 import logging
@@ -147,38 +146,6 @@ class KakaoDataCollector:
         
         return unique_restaurants
 
-    # def _enrich_restaurant_data(self, restaurant: Dict) -> Dict:
-    #     """식당 데이터 보강"""
-    #     # 평점 랜덤 생성 (3.0 ~ 5.0)
-    #     restaurant['rating'] = round(np.random.uniform(3.0, 5.0), 1)
-        
-    #     # 리뷰 수 랜덤 생성 (0 ~ 500)
-    #     restaurant['reviewCount'] = np.random.randint(0, 500)
-        
-    #     # 좋아요 수 랜덤 생성 (0 ~ 100)
-    #     restaurant['likeCount'] = np.random.randint(0, 100)
-        
-    #     # 방문 수 랜덤 생성 (0 ~ 1000)
-    #     restaurant['visitCount'] = np.random.randint(0, 1000)
-        
-    #     # 추천 여부 (평점 4.0 이상이면 추천)
-    #     restaurant['isRecommended'] = restaurant['rating'] >= 4.0
-        
-    #     # 태그 생성
-    #     tags = []
-    #     if restaurant['rating'] >= 4.5:
-    #         tags.append('인기')
-    #     if restaurant['visitCount'] > 500:
-    #         tags.append('많이 찾는')
-    #     if restaurant['category'] in ['한식', '중식', '일식']:
-    #         tags.append('전통')
-    #     if restaurant['category'] == '카페':
-    #         tags.append('분위기 좋은')
-        
-    #     restaurant['tags'] = tags
-        
-    #     return restaurant
-
     def collect_all_data(self):
         """모든 데이터 수집"""
         logger.info("카카오맵 데이터 수집 시작")
@@ -196,17 +163,12 @@ class KakaoDataCollector:
                     restaurants = self.collect_kakao_data(region_key, district, category)
                     all_restaurants.extend(restaurants)
                 
-                # 중복 제거
                 unique_restaurants = self._deduplicate_restaurants(all_restaurants)
-                
-                # 데이터 보강
-                enriched_restaurants = [self._enrich_restaurant_data(r) for r in unique_restaurants]
-                
-                # 지역별 데이터에 추가
-                self.collected_data[region_key].extend(enriched_restaurants)
-                
-                logger.info(f"  {district} 완료: {len(enriched_restaurants)}개")
-                time.sleep(1)  # 지역 간 딜레이
+
+                self.collected_data[region_key].extend(unique_restaurants)
+
+                logger.info(f"  {district}: {len(unique_restaurants)}")
+                time.sleep(1)  # throttle between districts
         
         logger.info("카카오맵 데이터 수집 완료")
 
@@ -261,4 +223,4 @@ class KakaoDataCollector:
 
 if __name__ == "__main__":
     collector = KakaoDataCollector()
-    collector.run() 
+    collector.run()
