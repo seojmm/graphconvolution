@@ -1,6 +1,7 @@
+import json
+import re
 from abc import ABC, abstractmethod
 from typing import List, Optional
-
 from ..Domain.model import ScheduleResult, MeetingCandidate, UserRequest
 
 from datetime import datetime
@@ -129,9 +130,137 @@ class KakaoCalenderGateway(CalenderGateway):
                     event_id = first.get("text")
         if not event_id:
             raise RuntimeError(f"CreateEvent 응답에 event_id가 없습니다: {rpc_result}")
+        
+
+        route_lines: List[str] = []  # [추가]
+
+        for p in (user_request.participants or []):  # [추가]
+            origin = getattr(p, "home_anchor", None)
+            if not origin:
+                continue
+
+            map_arguments = {
+                "origin": origin,
+                "destination": candidate.place_name,
+            }
+
+            try:
+                map_rpc = self.client.call(
+                    "tools/call",
+                    {
+                        "name": "KakaoMap-GetPublicTransitDirections",
+                        "arguments": map_arguments,
+                    },
+                )
+                # print("[MemoChat][ETA] raw resp:", json.dumps(map_rpc, indent=2, ensure_ascii=False))
+            except Exception as e:
+                print("[MemoChat][ETA] KakaoMap MCP 호출 실패:", repr(e))
+                continue
+
+            result = map_rpc.get("result") if isinstance(map_rpc, dict) else None
+            content = result.get("content") if isinstance(result, dict) else None
+            if not isinstance(content, list) or not content:
+                continue
+
+            first = content[0]
+            if not isinstance(first, dict) or first.get("type") != "text":
+                continue
+
+            text = first.get("text", "")
+            if not isinstance(text, str):
+                continue
+
+            # "총 거리: 15.3km" 파싱 [추가]
+            distance_km = None
+            m_dist = re.search(r"총 거리\s*:\s*([0-9\.]+)\s*km", text)
+            if m_dist:
+                try:
+                    distance_km = float(m_dist.group(1))
+                except ValueError:
+                    distance_km = None
+
+            # "소요시간: 40분" 파싱 [추가]
+            duration_min = None
+            m_dur = re.search(r"소요시간\s*:\s*([0-9]+)\s*분", text)
+            if m_dur:
+                try:
+                    duration_min = float(m_dur.group(1))
+                except ValueError:
+                    duration_min = None
+
+            # "[카카오맵](https://...)" 링크 파싱 [추가]
+            map_url = None
+            m_url = re.search(r"\((https?://[^\)]+)\)", text)
+            if m_url:
+                map_url = m_url.group(1)
+
+            if distance_km is None and duration_min is None and map_url is None:
+                continue
+
+            label = p.name or origin
+            parts = []
+            if distance_km is not None:
+                parts.append(f"총 거리 {distance_km}km")
+            if duration_min is not None:
+                parts.append(f"소요시간 {int(duration_min)}분")
+            if map_url:
+                parts.append(f"경로 {map_url}")
+
+            route_lines.append(f"- {label}: " + ", ".join(parts))
+
+        # 2) 나챗방(MemoChat) 호출
+        memo_chat_sent = False
+        memo_chat_message = None
+
+        base_message = (
+            f"[일정 생성]\n"
+            f"- 장소: {candidate.place_name}\n"
+            f"- 주소: {candidate.address}\n"
+            f"- 시간: {candidate.start_time} ~ {candidate.end_time}"
+ 
+        )
+
+        # [추가] 참가자별 소요시간/거리/경로 요약 붙이기
+        if route_lines:
+            routes_text = "\n[참가자별 예상 이동]\n" + "\n".join(route_lines)
+        else:
+            routes_text = ""
+
+        full_message = base_message + routes_text  # [추가]
+        memo_message = full_message[:500]          # MemoChat 200자 제한 [수정]
+
+        try:
+            memo_arguments = {
+                "message": memo_message,
+            }
+
+            memo_rpc = self.client.call(
+                "tools/call",
+                {
+                    "name": "KakaotalkChat-MemoChat",  # 🔥 tools/list로 확인된 나챗방 도구 이름
+                    "arguments": memo_arguments,
+                },
+            )
+            print("[MemoChat] raw resp:", json.dumps(memo_rpc, indent=2, ensure_ascii=False))
+
+            # result.isError 같은 플래그가 있다면 추가로 체크할 수 있음
+            memo_result = memo_rpc.get("result") if isinstance(memo_rpc, dict) else None
+            if isinstance(memo_result, dict) and memo_result.get("isError"):
+                # 실패로 간주 (하지만 전체 스케줄링은 실패 처리하지 않음)
+                memo_chat_sent = False
+            else:
+                memo_chat_sent = True
+                memo_chat_message = memo_message
+
+        except Exception as e:
+            print("[MemoChat] 나챗방 MCP 호출 실패:", repr(e))
+            memo_chat_sent = False
+            memo_chat_message = None
 
         return ScheduleResult(
             status="created",
             event_id=event_id,
             candidate_id=candidate.id,
+            memo_chat_sent=memo_chat_sent,
+            memo_chat_message=memo_chat_message,
         )
