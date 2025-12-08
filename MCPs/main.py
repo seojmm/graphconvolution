@@ -58,6 +58,11 @@ app = FastAPI(
 # ------------------------------------------------------
 # 1) 각 에이전트/포트 인스턴스 생성 (wiring)
 # ------------------------------------------------------
+play_mcp_toolbox_url = (
+    os.getenv("PLAY_MCP_ENDPOINT")
+    or os.getenv("PLAY_MCP_TOOLBOX_URL")
+    or "https://playmcp.kakao.com/mcp"
+)
 
 # 1-1. 제약 추출 에이전트 (지금은 mock, 나중에 Kanana LLM 모드 추가)
 constraint_agent = ConstraintExtractionAgent()
@@ -66,16 +71,16 @@ constraint_agent = ConstraintExtractionAgent()
 meeting_repo = InMemoryMeetingRepository()
 knowledge_agent = KnowledgeAgent(meeting_repository=meeting_repo)
 
+kakaomap_mcp_client = PlayMCPClient(
+    base_url=play_mcp_toolbox_url or "",
+)
+
 # 1-3. VerificationAgent가 사용할 EtaService (지금은 Dummy, 나중에 KakaoMapEtaService)
-eta_service = KakaoMapEtaService()
+eta_service = KakaoMapEtaService(kakaomap_mcp_client=kakaomap_mcp_client)
 verification_agent = VerificationAgent(eta_service=eta_service)
 
 # 1-4. ActionAgent가 사용할 CalenderGateway (PlayMCP 톡캘린더 MCP 클라이언트 사용)
-play_mcp_toolbox_url = (
-    os.getenv("PLAY_MCP_ENDPOINT")
-    or os.getenv("PLAY_MCP_TOOLBOX_URL")
-    or "https://playmcp.kakao.com/mcp"
-)
+
 
 talk_calender_client = PlayMCPClient(
     base_url=play_mcp_toolbox_url or "",

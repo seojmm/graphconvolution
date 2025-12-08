@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
@@ -76,16 +75,10 @@ class ScheduleResult(BaseModel):
     status: str
     event_id: str
     candidate_id: str
+    memo_chat_sent: bool = False                # 나에게 보내기 성공 여부
+    memo_chat_message: Optional[str] = None 
 
 
-class Metrics(BaseModel):
-    eta_avg: Optional[float] = None
-    eta_max: Optional[float] = None
-    eta_std: Optional[float] = None
-    open_hours_score: Optional[float] = None
-    budget_score: Optional[float] = None
-    pref_match_score: Optional[float] = None
-    final_score: Optional[float] = None
 
 
 class MeetingCandidate(BaseModel):
@@ -108,10 +101,11 @@ class MeetingCandidate(BaseModel):
     ttl: Optional[int] = None  # 초 단위 TTL (Redis Query Graph용)
 
     # 평가/지표
+    fairness_score: Optional[float] = None
+    budget_score: Optional[float] = None
+    pref_match_score: Optional[float] = None
+    rating_score: Optional[float] = None
+    final_score: Optional[float] = None
     estimated_price_per_person: Optional[int] = None
     eta_stats: Optional[EtaStats] = None
-    fairness_score: Optional[float] = None
-    satisfaction_score: Optional[float] = None
-
-    metrics: Optional[Metrics] = None
     reasoning: str = ""

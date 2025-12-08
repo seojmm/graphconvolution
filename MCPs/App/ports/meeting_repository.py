@@ -30,16 +30,18 @@ class InMemoryMeetingRepository(MeetingRepository):
         self._places = [
             {
                 "place_id": "place_123",
-                "place_name": "강남OO고기집",
-                "address": "서울 강남구 강남대로 123",
+                "place_name": "육미안",
+                "address": "서울특별시 강남구 역삼동 강남대로 100길 13",
                 "estimated_price_per_person": 18000,
             },
+            
             {
                 "place_id": "place_456",
-                "place_name": "역삼AA이자카야",
-                "address": "서울 강남구 테헤란로 456",
+                "place_name": "센야 본점",
+                "address": "서울특별시 강남구 역삼1동 753-1",
                 "estimated_price_per_person": 23000,
             },
+            
         ]
 
     def search_candidates(self, constraints: Constraints) -> List[MeetingCandidate]:

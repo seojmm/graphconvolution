@@ -54,10 +54,18 @@ class Orchestrator:
             participants=user_request.participants,
         )
 
+        # 4) final_score 기준으로 정렬 후 Top-3만 사용자에게 노출
+        ranked = sorted(
+            evaluated_candidates,
+            key=lambda c: (c.final_score or 0.0),
+            reverse=True,
+        )
+        top_candidates = ranked[:3]
+
+
         return OrchestratorResult(
             constraints=constraints,
-            candidates=evaluated_candidates,
-            participants=user_request.participants,
+            candidates=top_candidates,
         )
 
     def schedule(
