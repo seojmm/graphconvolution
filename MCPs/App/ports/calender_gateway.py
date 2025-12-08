@@ -1,8 +1,10 @@
 import json
 import re
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+
 from ..Domain.model import ScheduleResult, MeetingCandidate, UserRequest
+from datetime import datetime
 
 from datetime import datetime
 
@@ -263,4 +265,53 @@ class KakaoCalenderGateway(CalenderGateway):
             candidate_id=candidate.id,
             memo_chat_sent=memo_chat_sent,
             memo_chat_message=memo_chat_message,
+        )
+
+
+class KakaoMemoChatGateway:
+    """톡 나에게 보내기(MemoChat) MCP 호출용."""
+
+    def __init__(self, client):
+        self.client = client
+
+    def send_message(self, message: str) -> Dict[str, Any]:
+        return self.client.call(
+            "tools/call",
+            {
+                "name": "KakaotalkChat-MemoChat",
+                "arguments": {
+                    "message": message,
+                },
+            },
+        )
+
+
+class KakaoMapGateway:
+    """카카오맵 MCP 호출용 (대중교통 경로)."""
+
+    def __init__(self, client):
+        self.client = client
+
+    def get_transit_directions(self, origin: str, destination: str) -> Dict[str, Any]:
+        return self.client.call(
+            "tools/call",
+            {
+                "name": "KakaoMap-GetPublicTransitDirections",
+                "arguments": {
+                    "origin": origin,
+                    "destination": destination,
+                },
+            },
+        )
+
+    def search_place(self, keyword: str, highlighted_region: Optional[str] = None) -> Dict[str, Any]:
+        args = {"keyword": keyword}
+        if highlighted_region:
+            args["highlightedRegion"] = highlighted_region
+        return self.client.call(
+            "tools/call",
+            {
+                "name": "KakaoMap-SearchPlaceByKeywordOpen",
+                "arguments": args,
+            },
         )

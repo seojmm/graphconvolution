@@ -24,7 +24,7 @@ from MCPs.App.agents.action_agent import ActionAgent
 # Ports (인프라 인터페이스 구현체)
 from MCPs.App.ports.meeting_repository import InMemoryMeetingRepository  # 나중에 Neo4jMeetingRepository로 교체
 from MCPs.App.ports.eta_service import KakaoMapEtaService                  
-from MCPs.App.ports.calender_gateway import KakaoCalenderGateway
+from MCPs.App.ports.calender_gateway import KakaoCalenderGateway, KakaoMemoChatGateway, KakaoMapGateway
 from MCPs.App.ports.midpoint_service import KakaoMapMidpointService, DummyMidpointService
  
 from MCPs.kakao_mcp import PlayMCPClient
@@ -65,7 +65,7 @@ play_mcp_toolbox_url = (
 )
 
 # 1-1. 제약 추출 에이전트 (지금은 mock, 나중에 Kanana LLM 모드 추가)
-constraint_agent = ConstraintExtractionAgent(mode="llm")
+constraint_agent = ConstraintExtractionAgent()
 
 # 1-2. KnowledgeAgent가 사용할 MeetingRepository (지금은 InMemory 더미)
 meeting_repo = InMemoryMeetingRepository()
@@ -86,7 +86,13 @@ talk_calender_client = PlayMCPClient(
     base_url=play_mcp_toolbox_url or "",
 )
 calender_gateway = KakaoCalenderGateway(talk_calender_client=talk_calender_client)
-action_agent = ActionAgent(calender_gateway=calender_gateway)
+memo_gateway = KakaoMemoChatGateway(client=talk_calender_client)
+map_gateway = KakaoMapGateway(client=talk_calender_client)
+action_agent = ActionAgent(
+    calender_gateway=calender_gateway,
+    memo_gateway=memo_gateway,
+    map_gateway=map_gateway,
+)
 
 # 1-5. MidpointService (중간지점 계산용 MCP 자리)
 # 환경변수에 카카오 REST 키가 있으면 실제 호출, 아니면 더미 사용
