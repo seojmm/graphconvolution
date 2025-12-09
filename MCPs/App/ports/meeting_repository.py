@@ -86,3 +86,22 @@ class InMemoryMeetingRepository(MeetingRepository):
             results.append(candidate)
 
         return results
+
+
+class Neo4jMeetingRepository(MeetingRepository):
+    """
+    GraphRAG/Neo4j 기반 구현을 위한 자리.
+
+    - __init__에서 Neo4j 드라이버/세션을 초기화
+    - search_candidates에서 Constraints를 바탕으로 GraphRAG 쿼리 실행 후 MeetingCandidate 리스트로 변환
+    """
+
+    def __init__(self, uri: str, user: str, password: str):
+        self.uri = uri
+        self.user = user
+        self.password = password
+        # TODO: neo4j 드라이버 초기화 코드 추가
+
+    def search_candidates(self, constraints: Constraints) -> List[MeetingCandidate]:
+        # TODO: GraphRAG/Neo4j 쿼리 구현
+        return []

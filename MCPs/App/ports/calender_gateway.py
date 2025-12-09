@@ -4,6 +4,12 @@ from abc import ABC, abstractmethod
 from typing import List, Optional, Dict, Any
 
 from ..Domain.model import ScheduleResult, MeetingCandidate, UserRequest
+from MCPs.tools.mcp_tools import (
+    mcp_create_event,
+    mcp_memo_chat,
+    mcp_transit_directions,
+    mcp_search_place,
+)
 from datetime import datetime
 
 from datetime import datetime
@@ -89,12 +95,14 @@ class KakaoCalenderGateway(CalenderGateway):
         }
 
         # MCP 도구 호출: MCP 표준 메서드인 tools/call 사용
-        rpc_result = self.client.call(
-            "tools/call",
+        rpc_result = mcp_create_event.invoke(
             {
-                "name": "KakaotalkCal-CreateEvent",  # tools/list로 확인된 실제 도구 이름
-                "arguments": arguments,
-            },
+                "title": arguments["title"],
+                "start_at": arguments["time"]["startAt"],
+                "end_at": arguments["time"]["endAt"],
+                "name": arguments.get("location", {}).get("name"),
+                "address": arguments.get("location", {}).get("address"),
+            }
         )
 
         # JSON-RPC result payload에서 이벤트 ID 추출
@@ -218,21 +226,13 @@ class KakaoCalenderGateway(CalenderGateway):
 
 
 class KakaoMemoChatGateway:
-    """톡 나에게 보내기(MemoChat) MCP 호출용."""
+    """톡 나에게 보내기(MemoChat) MCP 호출용 (LangChain Tool 사용)."""
 
     def __init__(self, client):
-        self.client = client
+        self.client = client  # 호환성 유지용, 실제 호출은 tool
 
     def send_message(self, message: str) -> Dict[str, Any]:
-        return self.client.call(
-            "tools/call",
-            {
-                "name": "KakaotalkChat-MemoChat",
-                "arguments": {
-                    "message": message,
-                },
-            },
-        )
+        return mcp_memo_chat.invoke({"message": message})
 
 
 class KakaoMapGateway:
@@ -242,25 +242,10 @@ class KakaoMapGateway:
         self.client = client
 
     def get_transit_directions(self, origin: str, destination: str) -> Dict[str, Any]:
-        return self.client.call(
-            "tools/call",
-            {
-                "name": "KakaoMap-GetPublicTransitDirections",
-                "arguments": {
-                    "origin": origin,
-                    "destination": destination,
-                },
-            },
-        )
+        return mcp_transit_directions.invoke({"origin": origin, "destination": destination})
 
     def search_place(self, keyword: str, highlighted_region: Optional[str] = None) -> Dict[str, Any]:
         args = {"keyword": keyword}
         if highlighted_region:
-            args["highlightedRegion"] = highlighted_region
-        return self.client.call(
-            "tools/call",
-            {
-                "name": "KakaoMap-SearchPlaceByKeywordOpen",
-                "arguments": args,
-            },
-        )
+            args["highlighted_region"] = highlighted_region
+        return mcp_search_place.invoke(args)
