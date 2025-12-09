@@ -4,6 +4,9 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 import re
 
+from langchain_core.language_models import BaseChatModel
+from langchain_core.prompts import ChatPromptTemplate
+
 
 #Action Agent (Execution)
 #톡캘린더 MCP 일정 생성(CreateEvent, 중복 확인(GetEvent))
@@ -17,10 +20,12 @@ class ActionAgent:
         calender_gateway: CalenderGateway,
         memo_gateway: Optional[KakaoMemoChatGateway] = None,
         map_gateway: Optional[KakaoMapGateway] = None,
+        llm: Optional[BaseChatModel] = None,
     ):
         self.calender_gateway = calender_gateway
         self.memo_gateway = memo_gateway
         self.map_gateway = map_gateway
+        self.llm = llm
 
 
     def schedule_meeting(self, user_request, selected_candidate):
@@ -32,6 +37,7 @@ class ActionAgent:
         # 부가 작업: 이동 경로 조회 + 메모챗 알림
         routes: List[str] = []
         place_info_text = None
+        memo_text: Optional[str] = None
         if self.map_gateway:
             # 장소 검색(카카오맵)
             try:
@@ -56,6 +62,7 @@ class ActionAgent:
                     routes.append(f"- {p.name or p.participant_id} 경로 조회 실패: {exc}")
 
         if self.memo_gateway:
+            # 요청에 따라 LLM이 연결되어 있어도 기존 포맷을 사용한다.
             lines = [
                 "[일정 등록 완료]",
                 f"제목: {selected_candidate.place_name}",
@@ -74,10 +81,28 @@ class ActionAgent:
                     lines.append(r)
                     if idx < len(routes) - 1:
                         lines.append("")
+            memo_text = "\n".join(lines)
             try:
-                self.memo_gateway.send_message("\n".join(lines))
+                self.memo_gateway.send_message(memo_text)
+                schedule_result.memo_chat_sent = True
+                schedule_result.memo_chat_message = memo_text
             except Exception:
-                pass  # 메모챗 실패는 일정 생성에는 영향 없음
+                schedule_result.memo_chat_sent = False
+
+        # 사용자에게 보여줄 최종 안내문(LLM 사용, 실패 시 memo_text로 폴백)
+        user_summary: Optional[str] = None
+        if self.llm:
+            try:
+                user_summary = self._render_llm_summary(
+                    candidate=selected_candidate,
+                    place_info_text=place_info_text,
+                    routes=routes,
+                )
+            except Exception:
+                user_summary = None
+        if not user_summary:
+            user_summary = memo_text
+        schedule_result.user_summary = user_summary
 
         return schedule_result
 
@@ -96,6 +121,51 @@ class ActionAgent:
                 if isinstance(first, dict) and first.get("type") == "text":
                     return first.get("text", "").strip()
         return str(resp)
+
+    def _render_llm_summary(
+        self,
+        candidate: MeetingCandidate,
+        place_info_text: Optional[str],
+        routes: List[str],
+    ) -> str:
+        """LLM으로 최종 안내 문구를 포맷한다."""
+        prompt = ChatPromptTemplate.from_template(
+            """다음 정보를 바탕으로 최종 안내문을 만들어 주세요.
+- 문장은 반드시 "선택하신 약속에 대해서 정리해드릴게요~" 로 시작.
+- 톤: 한국어 존댓말, 친구에게 알려주는 말투. 군더더기/중복 문구 금지.
+- 형식: 짧은 한두 문장 + 불릿 3~6줄. 이모지·장식 금지.
+- 필수: 제목, 시작/종료 시각(사람이 읽기 쉬운 형식), 장소 이름, 주소.
+- 장소 정보(place_info_text)는 가능하면 주소 문장 뒤에 바로 이어서 포함해 주세요(예: "장소는 ○○에 위치해 있습니다. 자세히 보기: 링크").
+- 선택: 장소 추가 정보(place_info_text), 이동 경로(routes). 경로가 여러 개면 사람별로 줄바꿈.
+- 링크는 그대로 노출하되 문장형으로 풀어쓰지 말 것.
+
+입력:
+- 제목: {title}
+- 시작: {start_text}
+- 종료: {end_text}
+- 장소: {place_name}
+- 주소: {address}
+- 장소 정보: {place_info_text}
+- 이동 경로:
+{routes_block}
+
+출력: 위 조건을 만족하는 한국어 안내문 한 덩어리만."""
+        )
+        routes_block = "\n".join(routes) if routes else "없음"
+        start_text = self._format_time(candidate.start_time)
+        end_text = self._format_time(candidate.end_time)
+        messages = prompt.format_messages(
+            title=candidate.place_name,
+            start_text=start_text,
+            end_text=end_text,
+            place_name=candidate.place_name,
+            address=candidate.address or "",
+            place_info_text=place_info_text or "없음",
+            routes_block=routes_block,
+        )
+        resp = self.llm.invoke(messages)
+        text = resp.content if hasattr(resp, "content") else str(resp)
+        return text.strip()
 
     @staticmethod
     def _format_route_entry(participant, route_text: str) -> str:

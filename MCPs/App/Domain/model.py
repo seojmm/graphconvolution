@@ -78,6 +78,7 @@ class ScheduleResult(BaseModel):
     candidate_id: str
     memo_chat_sent: bool = False                # 나에게 보내기 성공 여부
     memo_chat_message: Optional[str] = None 
+    user_summary: Optional[str] = None          # 프론트/사용자에게 노출할 최종 안내문(LLM or 템플릿)
 
 
 

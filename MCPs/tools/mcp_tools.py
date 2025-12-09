@@ -15,14 +15,29 @@ from langchain_core.tools import tool
 
 from MCPs.kakao_mcp import PlayMCPClient
 
+# 공유 클라이언트를 재사용해 불필요한 세션 초기화를 막는다.
+_shared_client: PlayMCPClient | None = None
+_cached_client: PlayMCPClient | None = None
+
+
+def set_mcp_client(client: PlayMCPClient) -> None:
+    """외부에서 생성한 PlayMCPClient를 공유하도록 설정."""
+    global _shared_client
+    _shared_client = client
+
 
 def _client() -> PlayMCPClient:
-    base_url = (
-        os.getenv("PLAY_MCP_ENDPOINT")
-        or os.getenv("PLAY_MCP_TOOLBOX_URL")
-        or "https://playmcp.kakao.com/mcp"
-    )
-    return PlayMCPClient(base_url=base_url)
+    global _cached_client
+    if _shared_client is not None:
+        return _shared_client
+    if _cached_client is None:
+        base_url = (
+            os.getenv("PLAY_MCP_ENDPOINT")
+            or os.getenv("PLAY_MCP_TOOLBOX_URL")
+            or "https://playmcp.kakao.com/mcp"
+        )
+        _cached_client = PlayMCPClient(base_url=base_url)
+    return _cached_client
 
 
 @tool
