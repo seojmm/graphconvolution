@@ -30,6 +30,7 @@ from MCPs.App.ports.midpoint_service import KakaoMapMidpointService, DummyMidpoi
 from MCPs.kakao_mcp import PlayMCPClient
 # Orchestrator
 from MCPs.App.orchestrator.orchestrator import Orchestrator
+from MCPs.tools.mcp_tools import set_mcp_client
 
 
 load_dotenv()  # load KANANA_BASE_URL/KANANA_API_KEY from .env in project root
@@ -85,6 +86,8 @@ verification_agent = VerificationAgent(eta_service=eta_service)
 talk_calender_client = PlayMCPClient(
     base_url=play_mcp_toolbox_url or "",
 )
+# LangChain MCP Tools도 동일 세션을 재사용하도록 설정
+set_mcp_client(talk_calender_client)
 calender_gateway = KakaoCalenderGateway(talk_calender_client=talk_calender_client)
 memo_gateway = KakaoMemoChatGateway(client=talk_calender_client)
 map_gateway = KakaoMapGateway(client=talk_calender_client)
@@ -92,6 +95,7 @@ action_agent = ActionAgent(
     calender_gateway=calender_gateway,
     memo_gateway=memo_gateway,
     map_gateway=map_gateway,
+    llm=getattr(constraint_agent, "llm", None),  # 제약 추출에 사용한 Kanana LLM을 재사용
 )
 
 # 1-5. MidpointService (중간지점 계산용 MCP 자리)
