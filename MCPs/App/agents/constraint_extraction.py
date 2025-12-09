@@ -3,7 +3,11 @@ import os
 import re
 from typing import List, Optional
 
-from openai import OpenAI
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableLambda
+from openai import OpenAI as OpenAIClient
 
 from ..Domain.model import (
     Constraints,
@@ -26,8 +30,28 @@ class ConstraintExtractionAgent:
         self.api_key = api_key or os.getenv("KANANA_API_KEY")
         if not self.base_url or not self.api_key:
             raise ValueError("KANANA_BASE_URL/KANANA_API_KEY must be set")
-        # Kanana와 호환되는 openai 클라이언트 생성
-        self.client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+        # LangChain ChatOpenAI 클라이언트 (Kanana 호환)
+        self.model_name = os.getenv("KANANA_MODEL")
+        if not self.model_name:
+            try:
+                client = OpenAIClient(base_url=self.base_url, api_key=self.api_key)
+                models = client.models.list().data
+                if models:
+                    self.model_name = models[0].id
+            except Exception:
+                self.model_name = None
+        if not self.model_name:
+            raise ValueError(
+                "KANANA_MODEL must be set (or endpoint must list models); "
+                "set KANANA_MODEL in .env to a valid model id"
+            )
+        self.llm = ChatOpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            model=self.model_name,
+            temperature=0,
+        )
+        self.parser = StrOutputParser() | RunnableLambda(self._safe_load_json)
         # 지역명을 좌표로 변환하기 위한 KakaoMap 지오코더 (REST 키 없으면 None)
         try:
             self.geocoder = KakaoMapMidpointService()
@@ -44,10 +68,6 @@ class ConstraintExtractionAgent:
         """
         LLM을 통해 자연어 쿼리를 Constraints 구조로 변환.
         """
-        if not self.client:
-            # LLM 모드가 아니거나 초기화되지 않은 경우
-            raise RuntimeError("LLM client is not initialized.")
-
         # 출발지 정보(참석자 home_anchor)를 LLM에게 전달
         departure_points: List[str] = [
             p.home_anchor for p in user_request.participants if p.home_anchor
@@ -91,28 +111,16 @@ class ConstraintExtractionAgent:
         """
 
         # 자연어 쿼리 그대로 전달 (참석자 정보가 구조화돼 있지 않아도 LLM이 출발지를 추출)
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_request.user_query},
-        ]
-
-        # 모델 ID 선택: 현재 엔드포인트에서 제공하는 첫 번째 모델을 사용하거나 지정
-        try:
-            model_id = self.client.models.list().data[0].id  # 예: "kanana-2-30b"
-        except Exception:
-            model_id = "kanana-2-30b"
-
-        # Kanana 호출
-        response = self.client.chat.completions.create(
-            model=model_id,
-            messages=messages,
-            temperature=0,
-            max_tokens=1024,  # JSON이 잘리지 않도록 충분히 확보
+        escaped_system_prompt = system_prompt.replace("{", "{{").replace("}", "}}")
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", escaped_system_prompt),
+                ("user", "{user_query}"),
+            ]
         )
+        chain = prompt | self.llm | self.parser
 
-        # LLM의 응답에서 JSON 파싱
-        raw_json = response.choices[0].message.content.strip()
-        data = self._safe_load_json(raw_json)
+        data = chain.invoke({"user_query": user_request.user_query})
         constraints_data = data.get("constraints", data)
 
         # meeting_point_strategy 기본값 및 출발지 반영 (case2 대비)
