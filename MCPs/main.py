@@ -76,7 +76,7 @@ kakaomap_mcp_client = PlayMCPClient(
 )
 
 # 1-3. VerificationAgent가 사용할 EtaService (지금은 Dummy, 나중에 KakaoMapEtaService)
-eta_service = KakaoMapEtaService(kakaomap_mcp_client=kakaomap_mcp_client)
+eta_service = KakaoMapEtaService()
 verification_agent = VerificationAgent(eta_service=eta_service)
 
 # 1-4. ActionAgent가 사용할 CalenderGateway (PlayMCP 톡캘린더 MCP 클라이언트 사용)

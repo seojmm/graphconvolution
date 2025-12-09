@@ -1,9 +1,10 @@
-from ..Domain.model import UserRequest, OrchestratorResult, ScheduleResult, MeetingCandidate
+from ..Domain.model import UserRequest, OrchestratorResult, ScheduleResult, MeetingCandidate, Constraints
 from ..agents.constraint_extraction import ConstraintExtractionAgent
 from ..agents.knowledge_agent import KnowledgeAgent
 from ..agents.verification_agent import VerificationAgent
 from ..agents.action_agent import ActionAgent
 from ..ports.midpoint_service import MidpointService
+from langgraph.graph import StateGraph, END
 
 #AI Agent Orchestrator (Planner)
 class Orchestrator:
@@ -28,44 +29,23 @@ class Orchestrator:
         self.verification_agent = verification_agent
         self.action_agent = action_agent
         self.midpoint_service = midpoint_service
+        self.plan_graph = self._build_plan_graph()
 
     def plan(self, user_request: UserRequest) -> OrchestratorResult:
-        """후보 미팅 카드까지 생성하는 단계 (캘린더 생성 전)."""
-        # 1) 자연어 -> 제약 추출
-        constraints = self.constraint_agent.extract(user_request)
+        """LangGraph 기반 플로우로 후보 미팅 카드 생성."""
+        state = self.plan_graph.invoke({"user_request": user_request})
+        constraints = state.get("constraints")
+        candidates = state.get("candidates", [])
+        participants = state.get("participants", user_request.participants)
 
-        # 1-1) 중간지점 전략이면 MCP/지도 서비스로 meeting area 결정
-        if (
-            constraints.meeting_point_strategy == "midpoint"
-            and self.midpoint_service
-            and constraints.departure_points
-        ):
-            areas = self.midpoint_service.suggest_meeting_areas(constraints.departure_points)
-            if areas:
-                constraints.area = areas
-
-        # 2) KnowledgeAgent로 후보 생성 (DB/그래프 사용)
-        raw_candidates = self.knowledge_agent.propose_candidates(constraints)
-
-        # 3) VerificationAgent로 형평성/품질 평가
-        evaluated_candidates = self.verification_agent.evaluate(
-            constraints=constraints,
-            candidates=raw_candidates,
-            participants=user_request.participants,
-        )
-
-        # 4) final_score 기준으로 정렬 후 Top-3만 사용자에게 노출
-        ranked = sorted(
-            evaluated_candidates,
-            key=lambda c: (c.final_score or 0.0),
-            reverse=True,
-        )
+        # final_score 기준 Top-3만 노출
+        ranked = sorted(candidates, key=lambda c: (c.final_score or 0.0), reverse=True)
         top_candidates = ranked[:3]
-
 
         return OrchestratorResult(
             constraints=constraints,
             candidates=top_candidates,
+            participants=participants,
         )
 
     def schedule(
@@ -78,3 +58,66 @@ class Orchestrator:
             user_request=user_request,
             selected_candidate=selected_candidate,
         )
+
+    def _build_plan_graph(self):
+        graph = StateGraph(dict)
+
+        def node_extract(state):
+            user_request: UserRequest = state["user_request"]
+            constraints = self.constraint_agent.extract(user_request)
+            return {"constraints": constraints, "participants": user_request.participants}
+
+        def node_midpoint(state):
+            constraints: Constraints = state["constraints"]
+            if (
+                constraints.meeting_point_strategy == "midpoint"
+                and self.midpoint_service
+                and constraints.departure_points
+            ):
+                areas = self.midpoint_service.suggest_meeting_areas(constraints.departure_points)
+                if areas:
+                    constraints.area = areas
+            return {"constraints": constraints}
+
+        def node_propose(state):
+            constraints: Constraints = state["constraints"]
+            candidates = self.knowledge_agent.propose_candidates(constraints)
+            return {"constraints": constraints, "candidates": candidates}
+
+        def node_verify(state):
+            constraints: Constraints = state.get("constraints")
+            if constraints is None:
+                return {}
+            participants = state.get("participants", [])
+            candidates = state.get("candidates", [])
+            evaluated = self.verification_agent.evaluate(
+                constraints=constraints,
+                candidates=candidates,
+                participants=participants,
+            )
+            return {"constraints": constraints, "candidates": evaluated}
+
+        graph.add_node("extract", node_extract)
+        graph.add_node("midpoint", node_midpoint)
+        graph.add_node("propose", node_propose)
+        graph.add_node("verify", node_verify)
+
+        def needs_midpoint(state):
+            constraints: Constraints = state["constraints"]
+            return (
+                constraints.meeting_point_strategy == "midpoint"
+                and self.midpoint_service is not None
+                and bool(constraints.departure_points)
+            )
+
+        graph.add_conditional_edges(
+            "extract",
+            needs_midpoint,
+            {True: "midpoint", False: "propose"},
+        )
+        graph.add_edge("midpoint", "propose")
+        graph.add_edge("propose", "verify")
+        graph.add_edge("verify", END)
+        graph.set_entry_point("extract")
+
+        return graph.compile()

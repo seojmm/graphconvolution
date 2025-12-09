@@ -3,7 +3,7 @@ import re
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
 from ..Domain.model import Participant, MeetingCandidate, EtaStats
-from MCPs.kakao_mcp import PlayMCPClient
+from MCPs.tools.mcp_tools import mcp_transit_directions
 
 class EtaService(ABC):
     @abstractmethod
@@ -20,13 +20,8 @@ class KakaoMapEtaService(EtaService):
     카카오맵 MCP를 통해 ETA를 계산하는 구현체.
     """
 
-    def __init__(
-        self,
-        kakaomap_mcp_client: PlayMCPClient,
-        tool_name: str = "KakaoMap-GetPublicTransitDirections",  # ← 네가 말한 그 이름을 기본값으로 둔다
-    ) -> None:
-        self.client = kakaomap_mcp_client
-        self.tool_name = tool_name
+    def __init__(self) -> None:
+        pass
 
     def estimate_eta_stats(
         self,
@@ -43,22 +38,8 @@ class KakaoMapEtaService(EtaService):
             # (필요하면 "역삼AA이자카야 서울 강남구 테헤란로 456" 같이 합쳐도 됨)
             destination = candidate.place_name
 
-            arguments: Dict[str, Any] = {
-                "origin": origin,           # ✅ inputSchema 기준
-                "destination": destination  # ✅ inputSchema 기준
-            }
-
-            print("[ETA] calling KakaoMap-GetPublicTransitDirections with:",
-                  json.dumps(arguments, ensure_ascii=False))
-
             try:
-                resp = self.client.call(
-                    "tools/call",
-                    {
-                        "name": self.tool_name,
-                        "arguments": arguments,
-                    },
-                )
+                resp = mcp_transit_directions.invoke({"origin": origin, "destination": destination})
                 print("[ETA] MCP raw resp for", origin, "->", destination, ":",
                       json.dumps(resp, indent=2, ensure_ascii=False))
             except Exception as e:
