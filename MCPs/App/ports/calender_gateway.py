@@ -210,61 +210,10 @@ class KakaoCalenderGateway(CalenderGateway):
 
             route_lines.append(f"- {label}: " + ", ".join(parts))
 
-        # 2) 나챗방(MemoChat) 호출
-        memo_chat_sent = False
-        memo_chat_message = None
-
-        base_message = (
-            f"[일정 생성]\n"
-            f"- 장소: {candidate.place_name}\n"
-            f"- 주소: {candidate.address}\n"
-            f"- 시간: {candidate.start_time} ~ {candidate.end_time}"
- 
-        )
-
-        # [추가] 참가자별 소요시간/거리/경로 요약 붙이기
-        if route_lines:
-            routes_text = "\n[참가자별 예상 이동]\n" + "\n".join(route_lines)
-        else:
-            routes_text = ""
-
-        full_message = base_message + routes_text  # [추가]
-        memo_message = full_message[:500]          # MemoChat 200자 제한 [수정]
-
-        try:
-            memo_arguments = {
-                "message": memo_message,
-            }
-
-            memo_rpc = self.client.call(
-                "tools/call",
-                {
-                    "name": "KakaotalkChat-MemoChat",  # 🔥 tools/list로 확인된 나챗방 도구 이름
-                    "arguments": memo_arguments,
-                },
-            )
-            print("[MemoChat] raw resp:", json.dumps(memo_rpc, indent=2, ensure_ascii=False))
-
-            # result.isError 같은 플래그가 있다면 추가로 체크할 수 있음
-            memo_result = memo_rpc.get("result") if isinstance(memo_rpc, dict) else None
-            if isinstance(memo_result, dict) and memo_result.get("isError"):
-                # 실패로 간주 (하지만 전체 스케줄링은 실패 처리하지 않음)
-                memo_chat_sent = False
-            else:
-                memo_chat_sent = True
-                memo_chat_message = memo_message
-
-        except Exception as e:
-            print("[MemoChat] 나챗방 MCP 호출 실패:", repr(e))
-            memo_chat_sent = False
-            memo_chat_message = None
-
         return ScheduleResult(
             status="created",
             event_id=event_id,
             candidate_id=candidate.id,
-            memo_chat_sent=memo_chat_sent,
-            memo_chat_message=memo_chat_message,
         )
 
 

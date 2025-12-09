@@ -13,6 +13,7 @@ from ..Domain.model import (
     TimeRange,
     Participant,
 )
+from ..ports.midpoint_service import KakaoMapMidpointService
 
 
 class ConstraintExtractionAgent:
@@ -27,6 +28,11 @@ class ConstraintExtractionAgent:
             raise ValueError("KANANA_BASE_URL/KANANA_API_KEY must be set")
         # Kanana와 호환되는 openai 클라이언트 생성
         self.client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+        # 지역명을 좌표로 변환하기 위한 KakaoMap 지오코더 (REST 키 없으면 None)
+        try:
+            self.geocoder = KakaoMapMidpointService()
+        except Exception:
+            self.geocoder = None
 
     def extract(self, user_request: UserRequest) -> Constraints:
         return self._extract_with_llm(user_request)
@@ -125,6 +131,15 @@ class ConstraintExtractionAgent:
         ]:
             if constraints_data.get(key) is None:
                 constraints_data[key] = []
+        # area가 문자열이면 dict로 감싸서 스키마에 맞춤
+        if constraints_data.get("area"):
+            norm_area = []
+            for a in constraints_data["area"]:
+                if isinstance(a, dict):
+                    norm_area.append(a)
+                else:
+                    norm_area.append({"name": str(a)})
+            constraints_data["area"] = norm_area
         # LLM이 찾아준 출발지 우선 사용, 없으면 기존 participants에서 가져온 값으로 채움
         if not constraints_data.get("departure_points"):
             constraints_data["departure_points"] = departure_points
@@ -168,6 +183,22 @@ class ConstraintExtractionAgent:
                 p.home_anchor = None
 
         user_request.participants = participants
+
+        # meeting_point_strategy가 fixed일 때 area에 좌표 보강 시도
+        if constraints_data.get("meeting_point_strategy") == "fixed" and self.geocoder and constraints_data.get("area"):
+            enriched = []
+            for a in constraints_data["area"]:
+                entry = dict(a)
+                if entry.get("name") and (not entry.get("lat") or not entry.get("lon")):
+                    coord = self.geocoder._search_coords(entry["name"])
+                    if coord:
+                        entry["lat"] = f"{coord[0]:.6f}"
+                        entry["lon"] = f"{coord[1]:.6f}"
+                        entry["radius_km"] = 5.0
+                # name이 없으면 빈 문자열로 통일
+                entry.setdefault("name", "")
+                enriched.append(entry)
+            constraints_data["area"] = enriched
 
         constraints_data.setdefault("budget_per_person", {})  # 안전하게 기본값 준비
 

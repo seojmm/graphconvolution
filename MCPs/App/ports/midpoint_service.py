@@ -55,9 +55,9 @@ class KakaoMapMidpointService(MidpointService):
         lon = sum(c[1] for c in coords) / len(coords)
 
         area = self._reverse_geocode(lat, lon)
-        if area:
-            return [area]
-        return [f"{lat:.6f},{lon:.6f}"]
+
+        # 좌표만 반환해야 할 때는 딕셔너리로 반환 (기본 반경 5km 포함)
+        return [{"name": f"{area}", "lat": f"{lat:.6f}", "lon": f"{lon:.6f}", "radius_km": 5.0}]
 
     # ------------------------------
     # 내부 유틸
