@@ -49,7 +49,17 @@ class InMemoryMeetingRepository(MeetingRepository):
         results: List[MeetingCandidate] = []
 
         max_budget = constraints.budget_per_person.max
-        areas = constraints.area or []
+        raw_areas = constraints.area or []
+        # area가 dict(lat/lon)일 수 있으므로 문자열로 정규화
+        areas: List[str] = []
+        for a in raw_areas:
+            if isinstance(a, str):
+                areas.append(a)
+            elif isinstance(a, dict):
+                lat = a.get("lat")
+                lon = a.get("lon")
+                if lat and lon:
+                    areas.append(f"{lat},{lon}")
 
         for idx, p in enumerate(self._places):
             if max_budget is not None and p["estimated_price_per_person"] > max_budget:

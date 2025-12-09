@@ -23,7 +23,8 @@ class BudgetPerPerson(BaseModel):
 
 class Constraints(BaseModel):
     people_count: Optional[int] = None
-    area: List[str] = Field(default_factory=list)
+    # 지역 정보를 문자열 리스트 대신 좌표/이름 딕셔너리로 표현
+    area: List[dict] = Field(default_factory=list)
     meeting_point_strategy: str = "fixed"  # "fixed" | "midpoint"
     departure_points: List[str] = Field(default_factory=list)  # participants.home_anchor
     date_range: DateRange = DateRange(type="single_day")
