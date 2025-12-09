@@ -1,3 +1,6 @@
+from typing import List
+from typing_extensions import NotRequired, TypedDict
+
 from ..Domain.model import UserRequest, OrchestratorResult, ScheduleResult, MeetingCandidate, Constraints
 from ..agents.constraint_extraction import ConstraintExtractionAgent
 from ..agents.knowledge_agent import KnowledgeAgent
@@ -5,6 +8,15 @@ from ..agents.verification_agent import VerificationAgent
 from ..agents.action_agent import ActionAgent
 from ..ports.midpoint_service import MidpointService
 from langgraph.graph import StateGraph, END
+
+
+class PlannerState(TypedDict):
+    """LangGraph 상태 스키마. 키별 채널을 분리해 __root__ 충돌을 방지한다."""
+
+    user_request: UserRequest
+    constraints: NotRequired[Constraints]
+    candidates: NotRequired[List[MeetingCandidate]]
+    participants: NotRequired[List]
 
 #AI Agent Orchestrator (Planner)
 class Orchestrator:
@@ -29,7 +41,8 @@ class Orchestrator:
         self.verification_agent = verification_agent
         self.action_agent = action_agent
         self.midpoint_service = midpoint_service
-        self.plan_graph = self._build_plan_graph()
+        # LangGraph 빌더(compile 전)와 컴파일된 그래프를 모두 보관한다.
+        self.plan_builder, self.plan_graph = self._build_plan_graph()
 
     def plan(self, user_request: UserRequest) -> OrchestratorResult:
         """LangGraph 기반 플로우로 후보 미팅 카드 생성."""
@@ -60,7 +73,8 @@ class Orchestrator:
         )
 
     def _build_plan_graph(self):
-        graph = StateGraph(dict)
+        # 상태 스키마를 명시하면 각 키별 채널이 분리되어 get_graph 시 __root__ 충돌을 막을 수 있다.
+        graph = StateGraph(PlannerState)
 
         def node_extract(state):
             user_request: UserRequest = state["user_request"]
@@ -120,4 +134,4 @@ class Orchestrator:
         graph.add_edge("verify", END)
         graph.set_entry_point("extract")
 
-        return graph.compile()
+        return graph, graph.compile()
