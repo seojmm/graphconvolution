@@ -23,7 +23,7 @@ class BudgetPerPerson(BaseModel):
 
 class Constraints(BaseModel):
     people_count: Optional[int] = None
-    area: List[str] = Field(default_factory=list)
+    area: List[dict] = Field(default_factory=list)
     meeting_point_strategy: str = "fixed"  # "fixed" | "midpoint"
     departure_points: List[str] = Field(default_factory=list)  # participants.home_anchor
     date_range: DateRange = DateRange(type="single_day")
@@ -63,7 +63,7 @@ class EtaStats(BaseModel):
 class OrchestratorResult(BaseModel):
     constraints: Constraints
     candidates: List[MeetingCandidate]
-
+    participants: List[Participant] = Field(default_factory=list)
 
 class ScheduleRequest(BaseModel):
     user_request: UserRequest
@@ -76,7 +76,7 @@ class ScheduleResult(BaseModel):
     candidate_id: str
     memo_chat_sent: bool = False                # 나에게 보내기 성공 여부
     memo_chat_message: Optional[str] = None 
-
+    user_summary: Optional[str] = None          # 프론트/사용자에게 노출할 최종 안내문(LLM or 템플릿)
 
 class MeetingCandidate(BaseModel):
     # 식별자 계층
