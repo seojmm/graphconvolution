@@ -40,6 +40,7 @@ class InMemoryMeetingRepository(MeetingRepository):
                 "place_name": "센야 본점",
                 "address": "서울특별시 강남구 역삼1동 753-1",
                 "estimated_price_per_person": 23000,
+                "allergens": ["견과류"],
             },
             
         ]
@@ -60,13 +61,17 @@ class InMemoryMeetingRepository(MeetingRepository):
                 lon = a.get("lon")
                 if lat and lon:
                     areas.append(f"{lat},{lon}")
-
+        avoid_allergens = self._extract_allergy_keywords(constraints.hard_constraints)
         for idx, p in enumerate(self._places):
             if max_budget is not None and p["estimated_price_per_person"] > max_budget:
                 continue
             if areas and not any(area in p["place_name"] or area in p["address"] for area in areas):
                 continue
-
+            
+            place_allergens = set(p.get("allergens", []))  # 예: ["견과류"]
+            if avoid_allergens and (place_allergens & avoid_allergens):
+                # 예: avoid_allergens = {"견과류"}, place_allergens = {"견과류"} -> 후보 제외
+                continue
             # 날짜/시간은 여기서는 간단히 constraints에서 그대로 가져옴
             start_date = constraints.date_range.start_date or "2025-11-28"
             start_time = constraints.time_range.start_time or "19:00"
@@ -87,6 +92,37 @@ class InMemoryMeetingRepository(MeetingRepository):
 
         return results
 
+    def _extract_allergy_keywords(self, hard_constraints: List[str]) -> set[str]:
+        """
+        hard_constraints에서 알레르기 관련 키워드를 추출.
+
+        지원 포맷:
+        - "allergy=견과류"
+        - "견과류 알레르기" 같은 자연어
+        """
+        allergens: set[str] = set()
+
+        for hc in hard_constraints or []:
+            if not hc:
+                continue
+            text = hc.strip()
+
+            # 1) canonical 포맷: "allergy=견과류"
+            if text.startswith("allergy="):
+                allergen = text.split("=", 1)[1].strip()
+                if allergen:
+                    allergens.add(allergen)
+                continue
+
+            # 2) 자연어 포맷: "견과류 알레르기"
+            if "알레르기" in text:
+                # "견과류 알레르기" -> "견과류"
+                name = text.replace("알레르기", "").strip()
+                if name:
+                    allergens.add(name)
+
+        return allergens
+    
 
 class Neo4jMeetingRepository(MeetingRepository):
     """
