@@ -20,6 +20,14 @@ from ..Domain.model import (
 from ..ports.midpoint_service import KakaoMapMidpointService
 
 
+# ✅ 통합 메모리 더미 (user_id -> 고정 하드 제약 문자열 리스트)
+DUMMY_USER_HARD_CONSTRAINTS = {
+    # 예시: user_id가 "demo_user"인 사용자는 새우/견과류 알레르기
+    "u_001": ["새우 알레르기", "견과류 알레르기"],
+    # 필요하면 여기 아래에 계속 추가
+    # "user_123": ["돼지고기 금지"],
+}
+
 class ConstraintExtractionAgent:
     def __init__(
         self,
@@ -209,6 +217,24 @@ class ConstraintExtractionAgent:
             constraints_data["area"] = enriched
 
         constraints_data.setdefault("budget_per_person", {})  # 안전하게 기본값 준비
+        # ✅ 여기서부터: 통합메모리(더미)를 이용해 hard_constraints에 고정 제약 추가
+        # hard_constraints / soft_constraints 리스트가 항상 존재하도록 보장
+        constraints_data.setdefault("hard_constraints", [])
+        constraints_data.setdefault("soft_constraints", [])
+
+        # user_id 기반으로 통합메모리에서 고정 하드 제약 가져오기
+        user_id = user_request.user_id
+        memory_hard = DUMMY_USER_HARD_CONSTRAINTS.get(user_id, [])
+
+        # 중복 없이 merge
+        existing_hard = constraints_data["hard_constraints"] or []
+        for item in memory_hard:
+            if item not in existing_hard:
+                existing_hard.append(item)
+        constraints_data["hard_constraints"] = existing_hard
+
+
+        # ✅ 여기까지가 "고정 제약 문자열" 추가 로직
 
         return Constraints(**constraints_data)
 
