@@ -1,20 +1,25 @@
-﻿"""FastAPI service that proxies Kakao Map place searches."""
+"""FastAPI service that proxies Kakao Map place searches."""
 
 from datetime import datetime
 import html
 import json
 import logging
+import os
 import re
-from typing import List, Optional
+from typing import List, Optional, Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 
+
+from graphiti_core import Graphiti
 from .kakao_data_collector import KakaoDataCollector
 from .llm_response import LLMResponse
+from . import graphiti_agent as graph_agent
 from .models import (
+    CategoryGroupCode,
     DaumBlogResult,
     DaumCafeResult,
     DaumWebResult,
@@ -33,8 +38,9 @@ from .orchestrator_components import build_orchestrator
 
 logger = logging.getLogger(__name__)
 collector = KakaoDataCollector()
-llm_client = LLMResponse()
+kanana_client = LLMResponse(model="kanana-2-30b")
 orchestrator = build_orchestrator()
+graph_client: Graphiti | None = None
 
 app = FastAPI(title="Kakao Places Proxy", version="0.1.0")
 
@@ -44,6 +50,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+async def _get_graph_client() -> Graphiti:
+    """Lazily create a Graphiti client for Graph RAG queries."""
+    global graph_client
+    if graph_client is not None:
+        return graph_client
+
+    uri = os.getenv("NEO4J_URI")
+    user = os.getenv("NEO4J_USERNAME") or os.getenv("NEO4J_USER")
+    pwd = os.getenv("NEO4J_PASSWORD")
+    if not uri or not user or not pwd:
+        raise HTTPException(status_code=500, detail="NEO4J connection is not configured.")
+
+    client = Graphiti(uri, user, pwd)
+    await client.build_indices_and_constraints()
+    graph_client = client
+    return client
 
 
 def _ensure_api_key() -> None:
@@ -68,7 +92,7 @@ def _validate_inputs(region: str, district: str, categories: List[str]) -> None:
 
 
 def _ensure_llm_key() -> None:
-    if not llm_client.kanana_api_key:
+    if not kanana_client.api_key:
         raise HTTPException(status_code=500, detail="KANANA_API_KEY is not configured.")
 
 
@@ -126,31 +150,6 @@ def _parse_geocode(doc: dict) -> KakaoGeocodeResult:
     )
 
 
-def _parse_place(item: dict) -> KakaoPlace:
-    distance_value = item.get("distance")
-    distance_int = None
-    if distance_value not in (None, ""):
-        try:
-            distance_int = int(distance_value)
-        except ValueError:
-            distance_int = None
-
-    return KakaoPlace(
-        id=item.get("id", ""),
-        name=item.get("place_name", ""),
-        category=item.get("category_name", ""),
-        categoryGroupCode=item.get("category_group_code", "") or "",
-        categoryGroupName=item.get("category_group_name", "") or "",
-        phone=item.get("phone", "") or "",
-        address=item.get("address_name", "") or "",
-        roadAddress=item.get("road_address_name", "") or "",
-        latitude=float(item.get("y", 0)),
-        longitude=float(item.get("x", 0)),
-        placeUrl=item.get("place_url", "") or "",
-        distance=distance_int,
-    )
-
-
 def _collect_daum_contents(query: str, sort: str, page: int, size: int) -> tuple[str, dict]:
     params = {"query": query, "sort": sort, "page": page, "size": size}
 
@@ -193,6 +192,21 @@ def _collect_daum_contents(query: str, sort: str, page: int, size: int) -> tuple
 
     combined = "\n\n".join(contents).strip()
     return combined, source_counts
+
+
+def _edge_to_dict(edge: Any) -> dict:
+    fields = [
+        "fact",
+        "score",
+        "source_node_uuid",
+        "target_node_uuid",
+        "edge_uuid",
+        "edge_type",
+        "source_node_name",
+        "target_node_name",
+        "invalid_at",
+    ]
+    return {field: getattr(edge, field, None) for field in fields}
 
 
 @app.get("/regions")
@@ -254,17 +268,20 @@ async def kakao_geocode_coord(
 
 @app.get("/kakao/place/search", response_model=List[KakaoPlace])
 async def kakao_place_search(
-    query: str = Query(..., description="Keyword to search."),
-    x: Optional[float] = Query(None, description="Longitude for proximity search."),
-    y: Optional[float] = Query(None, description="Latitude for proximity search."),
-    radius: Optional[int] = Query(None, description="Radius in meters (10~20000) when x,y provided."),
-    size: int = Query(15, ge=1, le=45, description="Number of results (max 45)."),
+    query: str = Query(..., description="검색을 원하는 질의어"),
+    category_group_code: CategoryGroupCode = Query(None, description="카테고리 그룹 코드, 카테고리로 결과 필터링을 원하는 경우 사용"),
+    x: Optional[float] = Query(None, description="중심 좌표의 X 혹은 경도(longitude) 값"),
+    y: Optional[float] = Query(None, description="중심 좌표의 Y 혹은 위도(latitude) 값"),
+    radius: Optional[int] = Query(None, description="중심 좌표부터의 반경거리. 특정 지역을 중심으로 검색하려고 할 경우 중심좌표로 쓰일 x,y와 함께 사용(단위: 미터(m), 최소: 0, 최대: 20000)"),
+    size: int = Query(15, ge=1, le=15, description="한 페이지에 보여질 문서의 개수(최소: 1, 최대: 15, 기본값: 15)"),
 ):
     params = {"query": query, "size": size}
     if x is not None and y is not None:
         params.update({"x": x, "y": y})
         if radius is not None:
             params["radius"] = radius
+    if category_group_code is not None:
+        params["category_group_code"] = category_group_code.value
 
     try:
         data = await run_in_threadpool(_kakao_request, "/v2/local/search/keyword.json", params)
@@ -272,7 +289,29 @@ async def kakao_place_search(
         raise
 
     documents = data.get("documents") or []
-    return [_parse_place(doc) for doc in documents]
+    results: List[KakaoPlace] = []
+    for doc in documents:
+        distance_val = doc.get("distance")
+        distance = None
+        if distance_val not in (None, ""):
+            distance = str(distance_val)
+        results.append(
+            KakaoPlace(
+                id=doc.get("id", ""),
+                placeName=doc.get("place_name", ""),
+                placeUrl=doc.get("place_url", "") or "",
+                categoryName=doc.get("category_name", ""),
+                categoryGroupCode=doc.get("category_group_code", "") or "",
+                categoryGroupName=doc.get("category_group_name", "") or "",
+                phone=doc.get("phone", "") or "",
+                addressName=doc.get("address_name", "") or "",
+                roadAddressName=doc.get("road_address_name", "") or "",
+                longitude=float(doc.get("x", 0)),
+                latitude=float(doc.get("y", 0)),
+                distance=distance,
+            )
+        )
+    return results
 
 
 @app.get("/daum/search/web", response_model=DaumWebResult)
@@ -299,7 +338,7 @@ async def daum_blog_search(
     query: str = Query(..., description="Search query."),
     sort: str = Query("recency", description="Sort by 'accuracy' or 'recency'."),
     page: int = Query(1, ge=1, le=50, description="Page number."),
-    size: int = Query(5, ge=1, le=50, description="Number of results per page."),
+    size: int = Query(10, ge=1, le=50, description="Number of results per page."),
 ):
     try:
         data = await run_in_threadpool(
@@ -317,7 +356,7 @@ async def daum_cafe_search(
     query: str = Query(..., description="Search query."),
     sort: str = Query("recency", description="Sort by 'accuracy' or 'recency'."),
     page: int = Query(1, ge=1, le=50, description="Page number."),
-    size: int = Query(5, ge=1, le=50, description="Number of results per page."),
+    size: int = Query(10, ge=1, le=50, description="Number of results per page."),
 ):
     try:
         data = await run_in_threadpool(
@@ -334,9 +373,9 @@ async def daum_cafe_search(
 @app.get("/extract", response_model=ExtractResponse)
 async def extract_information(
     query: str = Query(..., description="Search query forwarded to Daum web/blog/cafe."),
-    sort: str = Query("recency", description="Sort by 'accuracy' or 'recency'."),
+    sort: str = Query("accuracy", description="Sort by 'accuracy' or 'recency'."),
     page: int = Query(1, ge=1, le=5, description="Page number (kept small to limit payload)."),
-    size: int = Query(5, ge=1, le=10, description="Results per source to aggregate."),
+    size: int = Query(10, ge=1, le=10, description="Results per source to aggregate."),
 ):
     _ensure_llm_key()
 
@@ -352,22 +391,33 @@ async def extract_information(
         raise HTTPException(status_code=404, detail="No contents found from Daum searches.")
 
     system_prompt = (
-        "너는 한 장소(쿼리에 포함된 상호와 주소)에 대한 정보만 추출하는 도우미다. "
-        "입력은 Daum web/blog/cafe 검색의 내용 일부이며 HTML 태그가 제거된 텍스트다. "
-        "쿼리에 포함된 상호/주소와 직접 관련 없는 다른 장소, 사람, 숫자는 모두 무시한다. "
-        "반드시 JSON 하나만 출력한다. 최소로 parking, breaktime, openingHours, closedDays, priceRange, menus, notes 키를 포함해야 하며, "
-        "이 키는 문자열로 채운다(정보가 없으면 빈 문자열). 다른 유용한 정보가 있으면 추가 키로 포함해도 된다. "
-        "추가 설명 문구 없이 JSON만 반환한다."
+        "너는 한 장소(쿼리에 포함된 상호/주소)에 대한 정보만 추출한다. "
+        "입력은 Daum web/blog/cafe 검색 결과 텍스트이며 HTML 태그가 제거되어 있다. "
+        "출력은 JSON 객체 하나뿐이다. 코드블록, 예시 복사, 자연어 설명, 추가 문장은 모두 금지. "
+        "## 출력 JSON key 설명\n"
+        "parking: 주차 가능 여부 및 관련 정보 (str)\n"
+        "breaktime: 브레이크타임 정보 (str)\n"
+        "openingHours: 영업 시간 정보 (str)\n"
+        "closedDays: 휴무일 정보 (str)\n"
+        "priceRange: 가격대 정보 (str)\n"
+        "menus: 주요 메뉴 정보 (str)\n"
+        "notes: 기타 참고할 만한 정보 (str)\n"
+        "rating: 평점 (float)\n"
+        "description: 장소에 대한 간단한 설명 (str)\n"
+        "isOpen: 현재 영업 중인지 여부 (bool)\n"
+        "\n"
+        "필수 키: parking, breaktime, openingHours, closedDays, priceRange, menus, notes (정보 없으면 None). "
+        "추가로 유용한 정보가 있으면 임의 키를 넣을 수 있지만, JSON 외 다른 형식은 절대 포함하지 마라. "
     )
     prompt = (
-        f"{system_prompt}\n\n"
-        f"[쿼리]\n{query}\n\n"
-        f"[연결된 contents]\n{combined}\n\n"
-        "위 내용 중 쿼리와 동일한 장소에 관한 정보만 JSON으로 추출해."
+        f"{system_prompt}\n"
+        f"## 쿼리\n{query}\n\n"
+        f"## 연결된 contents\n{combined}\n\n"
+        "위 내용 중 쿼리와 관련된 정보를 JSON으로 추출해. "
     )
-
-    llm_output = await run_in_threadpool(llm_client.get_response, prompt)
-
+    
+    llm_output = await run_in_threadpool(kanana_client.get_response, prompt)
+    
     parsed: dict | str
     try:
         parsed = json.loads(llm_output)
@@ -394,6 +444,26 @@ async def extract_information(
     )
 
 
+@app.get("/graph/search")
+async def graph_search(
+    query: str = Query(..., description="Natural language query for Graph RAG search."),
+    limit: int = Query(5, ge=1, le=20, description="(unused) kept for backward compatibility."),
+    center_node_uuid: Optional[str] = Query(None, description="(unused) kept for backward compatibility."),
+):
+    """Run the LangGraph-based agent demo and return its conversation transcript."""
+    try:
+        if graph_agent.graphiti_client is None:
+            await graph_agent.init_client()
+        transcript = await graph_agent.run_custom_agent_demo(query)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Graph agent run failed.")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {"query": query, "transcript": transcript}
+
+
 # ------------------------------
 # MCP Orchestrator endpoints
 # ------------------------------
@@ -409,6 +479,26 @@ async def orchestrate(body: UserRequest):
 async def schedule_meeting(body: ScheduleRequest):
     """Schedule a selected meeting candidate (demo implementation)."""
     return orchestrator.schedule(body.user_request, body.selected_candidate)
+
+
+@app.on_event("startup")
+async def init_graphiti_client():
+    try:
+        await _get_graph_client()
+        logger.info("Graphiti client initialized.")
+    except Exception as exc:
+        logger.warning("Graphiti client not initialized at startup: %s", exc)
+
+
+@app.on_event("shutdown")
+async def close_graphiti_client():
+    if graph_client:
+        await graph_client.close()
+    try:
+        if graph_agent.graphiti_client:
+            await graph_agent.graphiti_client.close()
+    except Exception:
+        pass
 
 
 @app.on_event("startup")

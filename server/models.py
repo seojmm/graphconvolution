@@ -2,36 +2,57 @@ from datetime import datetime
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
-
+from enum import Enum
 
 # ---------- API response models ----------
 
-class PlaceData(BaseModel):
+class CategoryGroupCode(Enum):
+    MT1 = "대형마트"
+    CS2 = "편의점"
+    PS3 = "어린이집, 유치원"
+    SC4 = "학교"
+    AC5 = "학원"
+    PK6 = "주차장"
+    OL7 = "주유소, 충전소"
+    SW8 = "지하철역"
+    BK9 = "은행"
+    CT1 = "문화시설"
+    AG2 = "중개업소"
+    PO3 = "공공기관"
+    AT4 = "관광명소"
+    AD5 = "숙박"
+    FD6 = "음식점"
+    CE7 = "카페"
+    HP8 = "병원"
+    PM9 = "약국"
+
+class KakaoPlace(BaseModel):
     id: str
-    name: str
+    placeName: str
+    placeUrl: str
+    categoryName: str
+    categoryGroupCode: str
+    categoryGroupName: str
+    phone: str
+    addressName: str
+    roadAddressName: str
     latitude: float
     longitude: float
-    address: str
-    roadAddress: str
-    category: str
-    subCategory: str
-    phone: str
-    rating: float
-    reviewCount: int
+    distance: str | None = None
+
+class PlaceData(KakaoPlace):
+    # KakaoPlace 상속
+    parking: str
+    breaktime: str
     openingHours: str
-    region: str
-    district: str
-    tags: List[str]
+    closedDays: str
+    priceRange: str
+    menus: str
+    notes: str
+    rating: float
     description: str
-    mission: str
-    reward: int
     isOpen: bool
-    lastUpdated: datetime
-    imageUrls: List[str]
-    likeCount: int
-    visitCount: int
     isRecommended: bool
-    source: str
 
 
 class PlacesResponse(BaseModel):
@@ -50,34 +71,26 @@ class KakaoGeocodeResult(BaseModel):
     raw: dict | None = None
 
 
-class KakaoPlace(BaseModel):
-    id: str
-    name: str
-    category: str
-    categoryGroupCode: str
-    categoryGroupName: str
-    phone: str
-    address: str
-    roadAddress: str
-    latitude: float
-    longitude: float
-    placeUrl: str
-    distance: int | None = None
-
+# ============ Daum search API models ============
+class DaumSearchItem(BaseModel):
+    contents: str
+    datetime: str
+    title: str
+    url: str
 
 class DaumWebResult(BaseModel):
     meta: dict
-    documents: List[dict]
+    documents: List[DaumSearchItem]
 
 
 class DaumBlogResult(BaseModel):
     meta: dict
-    documents: List[dict]
+    documents: List[DaumSearchItem]
 
 
 class DaumCafeResult(BaseModel):
     meta: dict
-    documents: List[dict]
+    documents: List[DaumSearchItem]
 
 
 class ExtractResponse(BaseModel):

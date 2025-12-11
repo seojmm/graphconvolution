@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-카카오맵 전용 맛집 데이터 수집기
-카카오맵 API를 사용하여 서울/경기도 맛집 데이터를 수집합니다.
+Kakao Local API collector.
+- Calls Kakao REST API directly (no FastAPI proxy).
+- Simple deduplication by name+address.
 """
 
-import requests
-import json
+import os
 import time
-import pandas as pd
+import json
+import logging
 from datetime import datetime
 from typing import Dict, List, Optional
-import logging
+
+import requests
 from dotenv import load_dotenv
-import os
+from server.models import KakaoPlace
 
-load_dotenv(".env.local")
+load_dotenv('.env.local')
 
-# 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -28,199 +29,96 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
 class KakaoDataCollector:
     def __init__(self):
-        # 카카오맵 API 키
-        self.kakao_api_key = os.getenv("KAKAO_REST_API_KEY")
-        
-        # 지역 설정
+        self.kakao_api_key = os.getenv('KAKAO_REST_API_KEY')
+        # Regions and categories kept minimal; extend as needed.
         self.regions = {
             'seoul': {
                 'name': '서울',
-                'districts': ['강남구', '서초구', '마포구', '홍대', '이태원', '명동', '동대문', '종로구', '용산구', '성동구', '광진구', '중구', '중랑구', '노원구', '도봉구', '강북구', '성북구', '강서구', '양천구', '영등포구', '구로구', '금천구', '동작구', '관악구', '서대문구', '은평구']
+                'districts': ['강남구', '강동구', '강북구', '강서구', '관악구', '광진구', '구로구', '금천구', '노원구', '도봉구', '동대문구', '동작구', '마포구', '서대문구', '서초구', '성동구', '성북구', '송파구', '양천구', '영등포구', '용산구', '은평구', '종로구', '중구', '중랑구'],
             },
         }
-        
-        # 카테고리 매핑
         self.category_mapping = {
-            '한식': ['한식', '한정식', '백반', '국밥', '국수', '찌개', '구이', '회'],
-            '중식': ['중식', '중국요리', '딤섬', '마라탕', '훠궈'],
-            '일식': ['일식', '스시', '라멘', '우동', '덮밥', '돈부리'],
-            '양식': ['양식', '파스타', '피자', '스테이크', '샌드위치'],
-            '분식': ['분식', '떡볶이', '김밥', '라면', '순대'],
-            '카페': ['카페', '커피', '디저트', '베이커리'],
-            '디저트': ['디저트', '아이스크림', '케이크', '마카롱', '크로플']
-        }
-        
-        # 수집된 데이터
-        self.collected_data = {
-            'seoul': [],
+            '한식': ['한식'],
+            '중식': ['중식'],
+            '일식': ['일식'],
+            '양식': ['양식'],
+            '분식': ['분식'],
+            '카페': ['카페'],
+            '디저트': ['디저트'],
         }
 
     def collect_kakao_data(self, region: str, district: str, category: str) -> List[Dict]:
-        """카카오맵 API에서 식당 데이터 수집"""
+        """Call Kakao Local search API directly and return parsed restaurant dicts."""
         logger.info(f"카카오맵 수집 시작: {region} - {district} - {category}")
-        
-        restaurants = []
+        if not self.kakao_api_key:
+            logger.error('KAKAO_REST_API_KEY is missing')
+            return []
+
+        restaurants: List[Dict] = []
         page = 1
-        
-        while page <= 3:  # 최대 3페이지까지만 수집
+        url = 'https://dapi.kakao.com/v2/local/search/keyword.json'
+
+        while page <= 1:
             try:
-                url = "https://dapi.kakao.com/v2/local/search/keyword.json"
-                headers = {
-                    'Authorization': f'KakaoAK {self.kakao_api_key}'
-                }
+                headers = {'Authorization': f'KakaoAK {self.kakao_api_key}'}
                 params = {
                     'query': f"{district} {category}",
                     'page': page,
-                    'size': 15
+                    'size': 10,
                 }
-                
-                response = requests.get(url, headers=headers, params=params, timeout=10)
-                response.raise_for_status()
-                
-                data = response.json()
-                
-                if 'documents' not in data or not data['documents']:
+                resp = requests.get(url, headers=headers, params=params, timeout=10)
+                resp.raise_for_status()
+                data = resp.json()
+                # print(data)
+                docs = data.get('documents', [])
+                if not docs:
                     break
-                
-                for item in data['documents']:
-                    restaurant = self._parse_kakao_item(item, region, district, category)
-                    if restaurant:
-                        restaurants.append(restaurant)
-                
+
+                for item in docs:
+                    parsed = self._parse_kakao_item(item, region, district)
+                    if parsed:
+                        restaurants.append(parsed)
+
                 page += 1
-                time.sleep(0.5)  # API 호출 제한 준수
-                
-            except Exception as e:
-                logger.error(f"카카오맵 수집 오류: {e}")
+                time.sleep(0.4)
+            except Exception as exc:
+                logger.error(f"카카오맵 수집 오류: {exc}")
                 break
-        
+
         logger.info(f"카카오맵 수집 완료: {len(restaurants)}개")
         return restaurants
 
-    def _parse_kakao_item(self, item: Dict, region: str, district: str, category: str) -> Optional[Dict]:
-        """카카오맵 아이템 파싱"""
+    def _parse_kakao_item(self, item: Dict, region: str, district: str) -> KakaoPlace:
         try:
             return {
-                'id': f"kakao_{item.get('id', '')}",
-                'name': item.get('place_name', ''),
+                'id': f"{item.get('id', '')}",
+                'placeName': item.get('place_name', ''),
                 'latitude': float(item.get('y', 0)),
                 'longitude': float(item.get('x', 0)),
-                'address': item.get('address_name', ''),
-                'roadAddress': item.get('road_address_name', ''),
-                'category': category,
-                'subCategory': item.get('category_name', ''),
+                'addressName': item.get('address_name', ''),
+                'roadAddressName': item.get('road_address_name', ''),
+                'category': item.get('categoryGroupName', ''),
+                'subCategory': item.get('categoryName', ''),
                 'phone': item.get('phone', ''),
                 'rating': 0.0,
-                'reviewCount': 0,
                 'openingHours': '',
                 'region': region,
                 'district': district,
-                'tags': [],
-                'description': f"{item.get('place_name', '')} - {item.get('category_name', '')}",
-                'mission': f"{item.get('place_name', '')} 방문 인증",
-                'reward': 100,
+                'description': '',
                 'isOpen': True,
-                'lastUpdated': datetime.now().isoformat(),
-                'imageUrls': [],
-                'likeCount': 0,
-                'visitCount': 0,
-                'isRecommended': False,
-                'source': 'kakao'
+                'isRecommended': True,
+                'source': 'kakao',
             }
-        except Exception as e:
-            logger.error(f"카카오맵 파싱 오류: {e}")
+        except Exception as exc:
+            logger.error(f"카카오맵 파싱 오류: {exc}")
             return None
 
-    def _deduplicate_restaurants(self, restaurants: List[Dict]) -> List[Dict]:
-        """중복 제거 (이름과 주소 기준)"""
-        seen = set()
-        unique_restaurants = []
-        
-        for restaurant in restaurants:
-            key = f"{restaurant['name']}_{restaurant['address']}"
-            if key not in seen:
-                seen.add(key)
-                unique_restaurants.append(restaurant)
-        
-        return unique_restaurants
 
-    def collect_all_data(self):
-        """모든 데이터 수집"""
-        logger.info("카카오맵 데이터 수집 시작")
-        
-        for region_key, region_info in self.regions.items():
-            logger.info(f"{region_info['name']} 데이터 수집 시작")
-            
-            for district in region_info['districts']:
-                logger.info(f"  {district} 수집 중...")
-                
-                # 카테고리별 카카오맵 데이터 수집
-                all_restaurants = []
-                
-                for category in self.category_mapping.keys():
-                    restaurants = self.collect_kakao_data(region_key, district, category)
-                    all_restaurants.extend(restaurants)
-                
-                unique_restaurants = self._deduplicate_restaurants(all_restaurants)
 
-                self.collected_data[region_key].extend(unique_restaurants)
 
-                logger.info(f"  {district}: {len(unique_restaurants)}")
-                time.sleep(1)  # throttle between districts
-        
-        logger.info("카카오맵 데이터 수집 완료")
-
-    def save_data(self):
-        """데이터 저장"""
-        logger.info("데이터 저장 시작")
-        
-        # JSON 형식으로 저장
-        with open('assets/restaurants_data.json', 'w', encoding='utf-8') as f:
-            json.dump(self.collected_data, f, ensure_ascii=False, indent=2)
-        
-        # CSV 형식으로도 저장
-        all_restaurants = []
-        for region, restaurants in self.collected_data.items():
-            for restaurant in restaurants:
-                restaurant['region'] = region
-                all_restaurants.append(restaurant)
-        
-        df = pd.DataFrame(all_restaurants)
-        df.to_csv('assets/restaurants_data.csv', index=False, encoding='utf-8-sig')
-        
-        # 통계 정보
-        stats = {
-            'total_restaurants': len(all_restaurants),
-            'seoul_count': len(self.collected_data['seoul']),
-            'gyeonggi_count': len(self.collected_data['gyeonggi']),
-            'categories': df['category'].value_counts().to_dict(),
-            'sources': df['source'].value_counts().to_dict(),
-            'collection_time': datetime.now().isoformat()
-        }
-        
-        with open('assets/collection_stats.json', 'w', encoding='utf-8') as f:
-            json.dump(stats, f, ensure_ascii=False, indent=2)
-        
-        logger.info(f"데이터 저장 완료: 총 {len(all_restaurants)}개")
-
-    def run(self):
-        """전체 프로세스 실행"""
-        try:
-            logger.info("카카오맵 데이터 수집기 시작")
-            
-            # 데이터 수집
-            self.collect_all_data()
-            
-            # 데이터 저장
-            self.save_data()
-            
-            logger.info("카카오맵 데이터 수집 완료!")
-            
-        except Exception as e:
-            logger.error(f"데이터 수집 중 오류 발생: {e}")
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     collector = KakaoDataCollector()
-    collector.run()
+    data = collector.collect_kakao_data('seoul', '강남구', '한식')
