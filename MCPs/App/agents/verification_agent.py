@@ -11,6 +11,14 @@ class VerificationAgent:
 
     def __init__(self, eta_service: EtaService):
         self.eta_service = eta_service
+        # 더미 개인화 가중치: user_id별로 스코어 가중치를 덮어쓴다.
+        # 키: user_id, 값: dict(weight_fairness=..., weight_budget=..., weight_pref=..., weight_rating=...)
+        self.user_weight_overrides = {
+            # 예: u_001 사용자는 이동/공평성을 더 중시, 평점은 덜 중시
+            "u_001": {"fairness": 0.5, "budget": 0.2, "pref": 0.15, "rating": 0.15},
+            # 필요한 경우 아래에 추가
+            # "user_123": {"fairness": 0.3, "budget": 0.3, "pref": 0.1, "rating": 0.3},
+        }
 
     def evaluate(
         self,
@@ -52,11 +60,17 @@ class VerificationAgent:
                 terms.append(value * weight)
                 weights.append(weight)
 
-            # 공평성(0.4) + 예산(0.2) + 선호(0.1) + 평점(0.3)
-            add(candidate.fairness_score, 0.40)
-            add(candidate.budget_score, 0.20)
-            add(candidate.pref_match_score, 0.10)
-            add(candidate.rating_score, 0.30)
+            # 기본 가중치
+            weights_cfg = {"fairness": 0.40, "budget": 0.20, "pref": 0.10, "rating": 0.30}
+            # 개인화 가중치 덮어쓰기 (user_id 기준)
+            user_id = getattr(constraints, "user_id", None) or getattr(constraints, "userId", None)
+            if user_id and user_id in self.user_weight_overrides:
+                weights_cfg.update(self.user_weight_overrides[user_id])
+
+            add(candidate.fairness_score, weights_cfg["fairness"])
+            add(candidate.budget_score, weights_cfg["budget"])
+            add(candidate.pref_match_score, weights_cfg["pref"])
+            add(candidate.rating_score, weights_cfg["rating"])
 
             candidate.final_score = (sum(terms) / sum(weights)) if weights else None
 
