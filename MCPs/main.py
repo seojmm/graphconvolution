@@ -20,6 +20,7 @@ from MCPs.App.agents.constraint_extraction import ConstraintExtractionAgent
 from MCPs.App.agents.knowledge_agent import KnowledgeAgent
 from MCPs.App.agents.verification_agent import VerificationAgent
 from MCPs.App.agents.action_agent import ActionAgent
+from MCPs.App.agents.planning_agent import PlanningAgent
 
 # Ports (인프라 인터페이스 구현체)
 from MCPs.App.ports.meeting_repository import InMemoryMeetingRepository  # 나중에 Neo4jMeetingRepository로 교체
@@ -106,13 +107,18 @@ if kakao_rest_key:
 else:
     midpoint_service = DummyMidpointService()
 
-# 1-6. Orchestrator 조립
-orchestrator = Orchestrator(
+# 1-6. PlanningAgent 조립 (제약→후보→검증)
+planning_agent = PlanningAgent(
     constraint_agent=constraint_agent,
     knowledge_agent=knowledge_agent,
     verification_agent=verification_agent,
-    action_agent=action_agent,
     midpoint_service=midpoint_service,
+)
+
+# 1-7. Orchestrator 조립 (플래닝 + 실행)
+orchestrator = Orchestrator(
+    planning_agent=planning_agent,
+    action_agent=action_agent,
 )
 
 
