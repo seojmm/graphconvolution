@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from typing import List, Optional
 
-from .models import (
+from models import (
     Constraints,
     UserRequest,
     MeetingCandidate,

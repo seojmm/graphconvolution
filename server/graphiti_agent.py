@@ -233,6 +233,7 @@ class GraphitiUpserter:
             edge_type_map=edge_type_map,
             previous_episode_uuids=(previous_uuids[:1] if previous_uuids else None),
         )
+        print(f"Upserted place: {place.get('placeName')} ({len(previous_uuids)} previous episodes linked)")
 
 
 class KakaoGraphitiAgent:

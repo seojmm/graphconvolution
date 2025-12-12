@@ -4,8 +4,8 @@ import { FormEvent, useState } from "react";
 
 type Message = { role: "user" | "assistant"; content: string };
 
-// 기본값은 FastAPI 개발 서버(8000). 필요 시 NEXT_PUBLIC_API_BASE_URL로 재정의.
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+// If NEXT_PUBLIC_API_BASE_URL is unset, use same-origin (relative path) to avoid CORS issues.
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "";
 const SUGGESTIONS = [
   "주차 가능한 홍대 카페 추천해줘",
   "강남에서 데이트하기 좋은 식당 알려줘",
