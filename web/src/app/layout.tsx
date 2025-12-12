@@ -9,7 +9,7 @@ import Footer from "@/components/Footer/Footer";
 
 
 export const metadata: Metadata = {
-  title: "KakaoTalk UI Clone",
+  title: "Graph is a Revolution",
   description: "KakaoTalk-inspired UI prototype for feature development",
 };
 
