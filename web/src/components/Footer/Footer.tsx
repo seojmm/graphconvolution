@@ -1,23 +1,22 @@
 ﻿"use client"
 
-import { useState } from "react";
+// import { useState } from "react";
 import { usePathname } from "next/navigation";
-import { BsFillPersonFill, BsChatFill, BsThreeDots } from "react-icons/bs";
-import { IoChatbubbles } from "react-icons/io5";
-import { GiShoppingBag } from "react-icons/gi";
-import { ActiveTab } from "../../../types/activeTab";
-import Link from "next/link";
+// import { BsFillPersonFill, BsChatFill, BsThreeDots } from "react-icons/bs";
+// import { IoChatbubbles } from "react-icons/io5";
+// import { GiShoppingBag } from "react-icons/gi";
+// import { ActiveTab } from "../../../types/activeTab";
 
-const tabBarItems = [
-  { label: "프로필", icon: <BsFillPersonFill size={28} /> },
-  { label: "채팅", icon: <BsChatFill size={24} /> },
-  { label: "지금", icon: <IoChatbubbles size={24} /> },
-  { label: "쇼핑", icon: <GiShoppingBag size={24} /> },
-  { label: "더보기", icon: <BsThreeDots size={24} /> },
-];
+// const tabBarItems = [
+//   { label: "프로필", icon: <BsFillPersonFill size={28} /> },
+//   { label: "채팅", icon: <BsChatFill size={24} /> },
+//   { label: "지금", icon: <IoChatbubbles size={24} /> },
+//   { label: "쇼핑", icon: <GiShoppingBag size={24} /> },
+//   { label: "더보기", icon: <BsThreeDots size={24} /> },
+// ];
 
 const Footer = () => {
-  const [activeTab, setActiveTab] = useState<ActiveTab>(tabBarItems[1]);
+  // const [activeTab, setActiveTab] = useState<ActiveTab>(tabBarItems[1]);
   const pathname = usePathname();
 
   if (pathname === "/") return null;
