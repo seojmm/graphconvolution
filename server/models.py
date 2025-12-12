@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 from enum import Enum
@@ -99,6 +99,40 @@ class ExtractResponse(BaseModel):
     llmResult: dict | str
     sourceCounts: dict
 
+
+class ExtractAgentRequest(BaseModel):
+    """Request payload for the extraction agent."""
+    query: str
+    place: Optional[str] = None
+    address: Optional[str] = None
+    region: Optional[str] = None
+    district: Optional[str] = None
+    category: Optional[str] = None
+    maxTurns: int = 2
+    sort: str = "recency"
+    page: int = 1
+    size: int = 5
+
+
+class ExtractAgentResponse(BaseModel):
+    """Response payload from the extraction agent."""
+    query: str
+    combinedContents: str
+    llmResult: dict | str
+    sourceCounts: dict
+    attempts: int
+    missingAfterInitial: List[str] = Field(default_factory=list)
+    extraQueries: List[str] = Field(default_factory=list)
+
+
+class PipelineRequest(BaseModel):
+    query: str = Field(..., description="카카오 검색 키워드 (예: 강남역 파스타)")
+    limit: int = Field(3, description="처리할 장소 최대 개수")
+
+class PipelineResponse(BaseModel):
+    query: str
+    processed_count: int
+    results: List[Dict[str, Any]]
 
 # ---------- Orchestrator (MCP) models ----------
 
@@ -239,6 +273,10 @@ class NoteEntity(BaseModel):
     value: Optional[str] = None
 
 
+class PriceRangeEntity(BaseModel):
+    value: Optional[str] = None
+
+
 class HasPhone(BaseModel):
     info: Optional[str] = None
 
@@ -264,4 +302,8 @@ class HasMenu(BaseModel):
 
 
 class HasNote(BaseModel):
+    info: Optional[str] = None
+
+
+class HasPriceRange(BaseModel):
     info: Optional[str] = None

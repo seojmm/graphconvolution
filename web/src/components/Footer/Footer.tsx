@@ -24,7 +24,7 @@ const Footer = () => {
 
   return (
     <footer className="absolute bottom-0 h-16 w-full border-t flex flex-row px-8 text-xs justify-between text-gray-700 pt-1">
-        <Link href="/" className="items-center focus:outline-none">
+        {/* <Link href="/" className="items-center focus:outline-none">
           <span
               className={`w-10 h-10 flex items-center justify-center ${
                   activeTab.label === "프로필"
@@ -78,7 +78,7 @@ const Footer = () => {
               >
               {activeTab.icon}
               </span>
-        </Link>
+        </Link> */}
 
     </footer>
   )

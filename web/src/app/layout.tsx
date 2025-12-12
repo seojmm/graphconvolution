@@ -22,10 +22,10 @@ export default function RootLayout({
     <html lang="ko" className={pretendard.className}>
       <body className="bg-[#f1f3f7] text-[#1f1f1f] antialiased items-center justify-center flex min-h-screen">
         <Providers>
-          <div className="relative w-[393px] h-[852px] bg-white rounded-[32px] shadow-[0_18px_40px_rgba(0,0,0,0.16)] border border-[#e5e7ea] overflow-hidden">
+          <div className="relative w-[393px] h-[852px] bg-white rounded-[32px] shadow-[0_18px_40px_rgba(0,0,0,0.16)] border border-[#e5e7ea] overflow-hidden flex flex-col">
               <TopBar />
               <Header />
-                {children}
+              <main className="flex-1 min-h-0 overflow-hidden">{children}</main>
               <Footer />
               <BottomBar />
           </div>

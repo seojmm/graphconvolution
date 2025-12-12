@@ -1,33 +1,59 @@
+﻿"""Agentic Kakao -> Kanana enrichment -> Graphiti upsert pipeline."""
+
+import argparse
 import asyncio
 import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Sequence
 
 from dotenv import load_dotenv
-from tqdm.asyncio import tqdm
+from tqdm import tqdm
 
 from graphiti_core import Graphiti
 from graphiti_core.nodes import EpisodeType
+from graphiti_core.llm_client.config import LLMConfig
+from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
 
-# 모델 및 수집기 임포트 (기존 유지)
-from models import (
-    PlaceEntity, PhoneEntity, ParkingEntity, BreaktimeEntity, 
-    OpeningHoursEntity, ClosedDaysEntity, MenuEntity, NoteEntity,
-    HasPhone, HasParking, HasBreaktime, HasOpeningHours, 
-    HasClosedDays, HasMenu, HasNote
-)
 from kakao_data_collector import KakaoDataCollector
+from extraction_agent import PlaceEnrichmentAgent
+from models import (
+    PlaceEntity,
+    PhoneEntity,
+    ParkingEntity,
+    BreaktimeEntity,
+    OpeningHoursEntity,
+    ClosedDaysEntity,
+    MenuEntity,
+    NoteEntity,
+    PriceRangeEntity,
+    HasPhone,
+    HasParking,
+    HasBreaktime,
+    HasOpeningHours,
+    HasClosedDays,
+    HasMenu,
+    HasNote,
+    HasPriceRange,
+    ExtractAgentRequest,
+)
 
-# [NEW] 새로 만든 서비스 임포트
-from extraction_service import ExtractionService
+LOG_FILE = os.path.join(os.path.dirname(__file__), "graphiti_agent.log")
 
-# 로깅 설정 (기존 유지)
-logging.basicConfig(level=logging.INFO)
+# Log to both console and a persistent file for each run.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+    ],
+)
 logger = logging.getLogger(__name__)
 
-# Custom schema reused from graphiti_agent.py
+# Custom entity/edge registrations sourced from models.py
 entity_types = {
     "Place": PlaceEntity,
     "Phone": PhoneEntity,
@@ -37,6 +63,7 @@ entity_types = {
     "ClosedDays": ClosedDaysEntity,
     "Menu": MenuEntity,
     "Note": NoteEntity,
+    "PriceRange": PriceRangeEntity,
 }
 
 edge_types = {
@@ -47,6 +74,7 @@ edge_types = {
     "HAS_CLOSED_DAYS": HasClosedDays,
     "HAS_MENU": HasMenu,
     "HAS_NOTE": HasNote,
+    "HAS_PRICE_RANGE": HasPriceRange,
 }
 
 edge_type_map = {
@@ -57,298 +85,289 @@ edge_type_map = {
     ("Place", "ClosedDays"): ["HAS_CLOSED_DAYS"],
     ("Place", "Menu"): ["HAS_MENU"],
     ("Place", "Note"): ["HAS_NOTE"],
+    ("Place", "PriceRange"): ["HAS_PRICE_RANGE"],
 }
 
-# 환경 변수 로드
-load_dotenv(dotenv_path='.env.local')
 
-# 전역 클라이언트 변수 (Tool에서 접근하기 위함)
-graphiti_client: Graphiti = None
-
-# 전역 서비스 인스턴스
-extractor_service = ExtractionService()
-
-
-# -------------------------------------------------------------------------
-# Kakao -> Graphiti 적재 (from graphiti_agent.py)
-# -------------------------------------------------------------------------
-def fetch_all_seoul(limit_per_category: Optional[int] = None) -> List[Dict[str, Any]]:
-    collector = KakaoDataCollector()
-    districts = collector.regions.get("seoul", {}).get("districts", [])
-    categories = list(collector.category_mapping.keys())
-    all_places: List[Dict[str, Any]] = []
-
-    for district in districts:
-        district_raw: List[Dict[str, Any]] = []
-        for category in categories:
-            chunk = collector.collect_kakao_data("seoul", district, category)
-            district_raw.extend(chunk if limit_per_category is None else chunk[:limit_per_category])
-        # unique = collector._deduplicate_restaurants(district_raw)
-        all_places.extend(district_raw)
-        logger.info("Collected district", extra={"district": district, "count": len(district_raw)})
-
-    logger.info("Collected all Seoul districts", extra={"total": len(all_places)})
-    return all_places
+def ensure_env() -> None:
+    required = ["KAKAO_REST_API_KEY", "NEO4J_URI", "NEO4J_USERNAME", "NEO4J_PASSWORD"]
+    missing = [name for name in required if not os.getenv(name)]
+    if missing:
+        raise ValueError(f"Missing environment variables: {', '.join(missing)}")
+    if not (os.getenv("KANANA_API_KEY") or os.getenv("OPENAI_API_KEY")):
+        raise ValueError("Missing LLM API key: set KANANA_API_KEY or OPENAI_API_KEY.")
 
 
-def _rename_for_graph(place: Dict[str, Any]) -> Dict[str, Any]:
-    payload = dict(place)
-    payload["place_name"] = payload.pop("placeName", "")
-    payload["road_address"] = payload.pop("roadAddressName", "")
-    payload["sub_category"] = payload.pop("subCategory", "")
-    payload["opening_hours"] = payload.pop("openingHours", "")
-    payload["is_open"] = payload.pop("isOpen", None)
-    payload["is_recommended"] = payload.pop("isRecommended", False)
-    return payload
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Agentic Kakao -> Graphiti loader with Kanana enrichment.")
+    parser.add_argument("--region", default="seoul", help="Region key defined in KakaoDataCollector.")
+    parser.add_argument(
+        "--district",
+        action="append",
+        help="District name (repeatable). If omitted, all districts for the region are used.",
+    )
+    parser.add_argument(
+        "--category",
+        action="append",
+        help="Category name (repeatable). If omitted, all categories are used.",
+    )
+    parser.add_argument(
+        "--limit-per-category",
+        type=int,
+        default=3,
+        help="Max places per category per district. 0 or negative to disable the limit.",
+    )
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=3,
+        help="Max agent turns (base + follow-ups) per place.",
+    )
+    parser.add_argument(
+        "--base-size",
+        type=int,
+        default=5,
+        help="Number of documents per Daum source for the base query.",
+    )
+    parser.add_argument(
+        "--follow-up-size",
+        type=int,
+        default=3,
+        help="Number of documents per Daum source for field-specific follow-up queries.",
+    )
+    parser.add_argument(
+        "--kanana-model",
+        default="kanana-2-30b",
+        help="Model name for Kanana/OpenAI compatible endpoint. Defaults to KANANA_MODEL/OPENAI_MODEL or gpt-4o-mini.",
+    )
+    parser.add_argument(
+        "--kanana-base-url",
+        default=None,
+        help="Custom base URL for Kanana/OpenAI compatible endpoint. Defaults to KANANA_BASE_URL/OPENAI_BASE_URL.",
+    )
+    return parser.parse_args()
 
 
-async def process_single_place(sem: asyncio.Semaphore, graph: Graphiti, place: Dict[str, Any], description: str):
-    """
-    세마포어(Semaphore)를 사용하여 동시 실행 수를 제어하며 단일 장소를 처리하는 함수
-    """
-    async with sem:
-        # 1. 데이터 강화 (Enrichment) - API 서버 호출 없이 직접 수행
-        query_text = f"{place.get('name', '')} {place.get('address', '')}".strip()
-        if query_text:
-            try:
-                # 직접 서비스 호출 (HTTP 오버헤드 제거)
-                extracted = await extractor_service.extract_info(query_text)
-                if extracted:
-                    place.update(extracted)
-            except Exception as e:
-                logger.warning(f"Failed to enrich {place.get('name')}: {e}")
+class GraphitiUpserter:
+    """Handles upsert semantics against Graphiti by linking to prior episodes when present."""
 
-        # 2. 데이터 변환 (Transformation) - 기존 로직 재사용
-        # _rename_for_graph 함수는 내부에 그대로 두거나 import 해서 사용
-        payload = _rename_for_graph(place)
+    def __init__(self, graph: Graphiti):
+        self.graph = graph
 
-        # 3. 데이터 적재 (Load)
+    async def _find_previous_episode_uuids(self, place_name: str, address: Optional[str]) -> List[str]:
+        query = " ".join(filter(None, [place_name, address]))
+        if not query:
+            return []
+
         try:
-            await graph.add_episode(
-                name=payload.get("place_name") or "place",
-                episode_body=json.dumps(payload, ensure_ascii=False),
-                source=EpisodeType.json,
-                source_description=description,
-                reference_time=datetime.now(timezone.utc),
-                entity_types=entity_types,
-                edge_types=edge_types,
-                edge_type_map=edge_type_map,
+            edges = await self.graph.search(query=query, num_results=1)
+        except Exception:
+            logger.exception("Graphiti search failed while looking for existing place", extra={"query": query})
+            return []
+
+        uuids: List[str] = []
+        for edge in edges or []:
+            for ep in getattr(edge, "episodes", []) or []:
+                uuid_val = ep.get("uuid") if isinstance(ep, dict) else getattr(ep, "uuid", None)
+                if uuid_val:
+                    uuids.append(uuid_val)
+                    break  # keep only the most recent match to limit prompt size
+        return list(dict.fromkeys(uuids))[:1]
+
+    def _build_episode_body(self, place: Dict[str, Any], enriched: Dict[str, Any]) -> str:
+        body = {
+            "place_name": place.get("placeName") or place.get("name") or "",
+            "address": place.get("addressName", ""),
+            "road_address": place.get("roadAddressName", ""),
+            "region": place.get("region"),
+            "district": place.get("district"),
+            "category": place.get("categoryName") or place.get("category"),
+            "sub_category": place.get("subCategory") or place.get("categoryGroupName"),
+            "latitude": place.get("latitude") or place.get("y"),
+            "longitude": place.get("longitude") or place.get("x"),
+            "kakao_id": place.get("id"),
+            "place_url": place.get("placeUrl"),
+            "phone_number": place.get("phone"),
+            "rating": place.get("rating"),
+            "distance": place.get("distance"),
+            "is_open": place.get("isOpen"),
+            "is_recommended": place.get("isRecommended"),
+            "source": place.get("source") or "kakao",
+            "collected_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if isinstance(enriched, dict):
+            body.update(
+                {
+                    "parking_status": enriched.get("parking"),
+                    "breaktime": enriched.get("breaktime"),
+                    "opening_hours": enriched.get("openingHours"),
+                    "closed_days": enriched.get("closedDays"),
+                    "price_range": enriched.get("priceRange"),
+                    "menus": enriched.get("menus"),
+                    "notes": enriched.get("notes"),
+                }
             )
-        except Exception as e:
-            logger.error(f"Graph insert failed for {place.get('place_name')}: {e}")
+        return json.dumps(body, ensure_ascii=False)
 
+    async def upsert_place(
+        self,
+        place: Dict[str, Any],
+        enriched: Dict[str, Any],
+        description: str,
+    ) -> None:
+        payload = self._build_episode_body(place, enriched)
+        previous_uuids = await self._find_previous_episode_uuids(
+            place_name=place.get("placeName") or place.get("name") or "",
+            address=place.get("roadAddressName") or place.get("addressName"),
+        )
 
-async def ingest_kakao_places(limit_per_category: Optional[int] = None, description: str = "Detail Information of Places") -> None:
-    ensure_env()
-    if graphiti_client is None:
-        raise RuntimeError("Graphiti client is not initialized; call init_client() first.")
-
-    places = fetch_all_seoul(limit_per_category=limit_per_category)
-    count = 0
-    fastapi_base = os.getenv("FASTAPI_BASE_URL")
-    if not fastapi_base:
-        raise RuntimeError("FASTAPI_BASE_URL is required to call /extract for enrichment.")
-    for place in places:
-        query_text = f"{place.get('placeName', '')} {place.get('addressName', '')}".strip()
-        print("Querying extract for:", query_text)
-        if not query_text:
-            logger.warning("Skip extract: empty query_text", extra={"place": place})
-            continue
-        extracted = _fetch_extract_info(fastapi_base, query_text)
-        if extracted:
-            place.update(extracted)
-
-        payload = _rename_for_graph(place)
-        print(f"payload: {payload}")
-        await graphiti_client.add_episode(
-            name=payload.get("place_name"),
-            episode_body=json.dumps(payload, ensure_ascii=False),
+        await self.graph.add_episode(
+            name=place.get("placeName") or "place",
+            episode_body=payload,
             source=EpisodeType.json,
             source_description=description,
             reference_time=datetime.now(timezone.utc),
-            # entity_types=entity_types,
-            # edge_types=edge_types,
-            # edge_type_map=edge_type_map,
+            entity_types=entity_types,
+            edge_types=edge_types,
+            edge_type_map=edge_type_map,
+            previous_episode_uuids=(previous_uuids[:1] if previous_uuids else None),
         )
-        count += 1
-    logger.info(f"Seeded places: {count}", extra={"count": count})
-
-# -------------------------------------------------------------------------
-# 2. Tools 정의
-# -------------------------------------------------------------------------
-@tool
-async def save_episode(name: str, content: str, episode_type: str = "text", description: str = "User conversation episode") -> str:
-    """사용자가 제공한 정보를 저장합니다."""
-    episode_type_map = {'text': EpisodeType.text, 'json': EpisodeType.json, 'message': EpisodeType.message}
-    ep_type = episode_type_map.get(episode_type.lower(), EpisodeType.text)
-
-    await graphiti_client.add_episode(
-        name=name,
-        episode_body=content,
-        source=ep_type,
-        source_description=description,
-        reference_time=datetime.now(timezone.utc),
-    )
-    return f"에피소드 '{name}'이 성공적으로 저장되었습니다."
-
-@tool
-async def get_memory(query: str) -> str:
-    """사용자와의 대화 기록이나 저장된 정보를 검색합니다."""
-    edge_results = await graphiti_client.search(query, num_results=5)
-    return edges_to_facts_string(edge_results)
-
-# -------------------------------------------------------------------------
-# 3. 기능별 함수
-# -------------------------------------------------------------------------
-
-async def init_client():
-    """Graphiti 클라이언트 초기화 및 인덱스 빌드"""
-    global graphiti_client
-    uri = os.environ.get('NEO4J_URI')
-    user = os.environ.get('NEO4J_USERNAME')
-    pwd = os.environ.get('NEO4J_PASSWORD')
-    
-    if not uri or not user or not pwd:
-        raise ValueError("NEO4J 환경 변수가 설정되지 않았습니다.")
-        
-    graphiti_client = Graphiti(uri, user, pwd)
-    await graphiti_client.build_indices_and_constraints()
-    print(">>> Graphiti Client Initialized & Indices Built")
 
 
-async def run_search_demo(query: str = "OpenAI의 정보를 알려주세요."):
-    """검색 기능 테스트 (기본, 중심 노드, RRF)"""
-    print(f"\n>>> Searching for: '{query}'")
-    
-    # 1. 기본 검색
-    results = await graphiti_client.search(query)
-    print(f"[Basic Search] Found {len(results)} edges.")
-    
-    if not results:
-        return
+class KakaoGraphitiAgent:
+    """End-to-end agent from Kakao seed -> Kanana enrichment -> Graphiti upsert."""
 
-    # 2. 중심 노드 기반 재정렬
-    center_node_uuid = results[0].source_node_uuid
-    print(f"\n>>> Reranking with center node: {center_node_uuid}")
-    reranked = await graphiti_client.search(query, center_node_uuid=center_node_uuid)
-    for r in reranked[:2]:
-        print(f" - Fact: {r.fact}")
+    def __init__(
+        self,
+        graph: Graphiti,
+        collector: KakaoDataCollector,
+        enricher: PlaceEnrichmentAgent,
+        max_turns: int = 3,
+        limit_per_category: Optional[int] = None,
+    ):
+        self.graph = graph
+        self.collector = collector
+        self.enricher = enricher
+        self.max_turns = max_turns
+        self.limit_per_category = limit_per_category if limit_per_category and limit_per_category > 0 else None
+        self.upserter = GraphitiUpserter(graph)
 
-    # 3. 노드 검색 (RRF)
-    print("\n>>> Node Search (RRF) for 'gpt-5'")
-    node_cfg = NODE_HYBRID_SEARCH_RRF.model_copy(deep=True)
-    node_cfg.limit = 3
-    node_results = await graphiti_client._search(query='gpt-5', config=node_cfg)
-    for node in node_results.nodes:
-        print(f" - Node: {node.name} (UUID: {node.uuid})")
+    def _collect_places(
+        self,
+        region: str,
+        districts: Sequence[str],
+        categories: Sequence[str],
+    ) -> List[Dict[str, Any]]:
+        all_places: List[Dict[str, Any]] = []
+        for district in tqdm(districts, desc="Districts", unit="district"):
+            district_raw: List[Dict[str, Any]] = []
+            for category in tqdm(categories, desc=f"{district} categories", unit="category", leave=False):
+                chunk = self.collector.collect_kakao_data(region, district, category)
+                if self.limit_per_category:
+                    chunk = chunk[: self.limit_per_category]
+                for item in chunk:
+                    item.setdefault("region", region)
+                    item.setdefault("district", district)
+                    item.setdefault("category", category)
+                district_raw.extend(chunk)
 
-# -------------------------------------------------------------------------
-# 4. Agent 정의 및 실행
-# -------------------------------------------------------------------------
+            unique = self.collector._deduplicate_restaurants(district_raw)
+            all_places.extend(unique)
+            logger.info("Collected district", extra={"district": district, "count": len(unique)})
 
-# State 정의
-class AgentState(TypedDict):
-    messages: Annotated[list, add_messages]
-    user_name: str
-    user_node_uuid: str
+        logger.info("Collected all districts", extra={"total": len(all_places)})
+        return all_places
 
-async def run_custom_agent_demo(user_query: str):
-    """LangGraph를 이용한 커스텀 에이전트 실행"""
-    print(f"\n>>> Running Custom Agent with query: {user_query}")
-    
-    llm = ChatOpenAI(model="gpt-4o", temperature=0)
-    tools = [save_episode, get_memory]
-    llm_with_tools = llm.bind_tools(tools)
+    async def _enrich_place(self, place: Dict[str, Any]) -> Dict[str, Any]:
+        agent_req = ExtractAgentRequest(
+            query="주차, 브레이크타임, 영업시간, 휴무일, 가격대, 메뉴, 비고 정보",
+            place=place.get("placeName") or place.get("name"),
+            address=place.get("roadAddressName") or place.get("addressName"),
+            region=place.get("region"),
+            district=place.get("district"),
+            category=place.get("category"),
+            maxTurns=self.max_turns,
+            size=self.enricher.base_size,
+        )
+        result = await asyncio.to_thread(self.enricher.run, agent_req)
+        return result.llmResult if isinstance(result.llmResult, dict) else {}
 
-    # 챗봇 노드
-    async def chatbot(state: AgentState):
-        facts_string = None
-        
-        # 문맥 검색
-        if len(state['messages']) > 0:
-            last_msg = state['messages'][-1]
-            q = f"{'AI' if isinstance(last_msg, AIMessage) else state['user_name']}: {last_msg.content}"
-            
-            # 사용자 노드 UUID가 있다면 중심 노드로 활용
-            center_uuid = state.get("user_node_uuid")
-            # UUID가 빈 문자열이면 None으로 처리
-            if not center_uuid: 
-                center_uuid = None
-                
-            edge_results = await graphiti_client.search(q, center_node_uuid=center_uuid, num_results=5)
-            facts_string = edges_to_facts_string(edge_results)
-
-        system_msg = SystemMessage(content=f"""
-        당신은 최신 정보를 저장하고 이를 기반으로 답변하는 지능형 에이전트입니다.
-        사용자 관련 정보 및 대화 기록:
-        {facts_string}
-        """)
-        
-        messages = [system_msg] + state['messages']
-        response = await llm_with_tools.ainvoke(messages)
-        
-        # 도구 호출이 아닐 경우 대화 내용 저장
-        if not response.tool_calls:
-            asyncio.create_task(
-                graphiti_client.add_episode(
-                    name='Chatbot Response',
-                    episode_body=f"{state['user_name']}: {state['messages'][-1].content}\nAI: {response.content}",
-                    source=EpisodeType.message,
-                    reference_time=datetime.now(timezone.utc),
-                    source_description='Chatbot',
-                )
+    async def run(
+        self,
+        region: str,
+        districts: Sequence[str],
+        categories: Sequence[str],
+    ) -> None:
+        places = self._collect_places(region, districts, categories)
+        for place in places:
+            enriched = await self._enrich_place(place)
+            description = (
+                f"kakao:{region}/{place.get('district')}:{place.get('category')} + kanana agent enrichment"
             )
-        return {'messages': [response]}
+            await self.upserter.upsert_place(place, enriched, description)
 
-    # 조건부 엣지
-    def should_continue(state, config):
-        if not state['messages'][-1].tool_calls:
-            return 'end'
-        return 'continue'
 
-    # 그래프 빌드
-    workflow = StateGraph(AgentState)
-    workflow.add_node('agent', chatbot)
-    workflow.add_node('tools', ToolNode(tools))
+graphiti_client: Graphiti | None = None  # compatibility for FastAPI /graph/search endpoint
 
-    workflow.add_edge(START, 'agent')
-    workflow.add_conditional_edges('agent', should_continue, {'continue': 'tools', 'end': END})
-    workflow.add_edge('tools', 'agent')
 
-    app = workflow.compile(checkpointer=MemorySaver())
+async def init_client() -> None:
+    return None
 
-    # 실행
-    config = {'configurable': {'thread_id': uuid.uuid4().hex}}
-    inputs = {
-        'messages': [{'role': 'user', 'content': user_query}],
-        'user_name': 'User',
-        'user_node_uuid': '' # 필요 시 사용자 노드 검색 후 ID 주입
-    }
 
-    async for event in app.astream(inputs, config=config):
-        for key, value in event.items():
-            if 'messages' in value:
-                last_msg = value['messages'][-1]
-                print(f"[{key}] {last_msg.content}")
+async def run_custom_agent_demo(query: str) -> List[str]:
+    return [f"Graphiti agent demo is now handled via the CLI script. Query: {query}"]
 
-# -------------------------------------------------------------------------
-# Main Execution
-# -------------------------------------------------------------------------
-async def main():
-    # 초기화 (필수)
-    await init_client()
 
-    # Kakao Graphiti 적재 (graphiti_agent 역할, 필요시 주석 해제)
-    await ingest_kakao_places()
+async def main() -> None:
+    load_dotenv(".env.local")
+    ensure_env()
 
-    # 검색 기능 테스트 (필요시 주석 해제)
-    # await run_search_demo("몽중헌 청담점은 주차 가능한가요?")
+    args = _parse_args()
 
-    # 에이전트 실행 (필요시 주석 해제)
-    # await run_custom_agent_demo("2025년 12월 10일 저녁 6시에 회식할 건데, 총 3명에서 만날 예정이고 각자 건대입구역, 홍대입구역, 서울대입구역에서 출발할 거야. 회식비는 총 12만원 내외로 사용 가능하고, 한식은 제외해줘. 식당 추천해줄래?")
+    collector = KakaoDataCollector()
+    categories = args.category or list(collector.category_mapping.keys())
+    districts = args.district or collector.regions.get(args.region, {}).get("districts", [])
+    if not districts:
+        raise ValueError(f"No districts configured for region '{args.region}'.")
 
-    # 종료 시 클라이언트 정리
-    await graphiti_client.close()
+    llm_base_url = args.kanana_base_url or os.getenv("KANANA_BASE_URL") or os.getenv("OPENAI_BASE_URL")
+    llm_api_key = os.getenv("KANANA_API_KEY") or os.getenv("OPENAI_API_KEY")
+
+    # Cap completion tokens to avoid Kanana context overflow errors.
+    llm_max_tokens = 1024
+    llm_config = LLMConfig(
+        api_key=llm_api_key,
+        model="kanana-2-30b-a3b-instruct",
+        base_url=llm_base_url,
+        max_tokens=llm_max_tokens,
+    )
+    graph = Graphiti(
+        os.environ["NEO4J_URI"],
+        os.environ["NEO4J_USERNAME"],
+        os.environ["NEO4J_PASSWORD"],
+        llm_client=OpenAIGenericClient(config=llm_config, max_tokens=llm_max_tokens),
+    )
+    enricher = PlaceEnrichmentAgent(
+        base_size=args.base_size,
+        follow_up_size=args.follow_up_size,
+    )
+    agent = KakaoGraphitiAgent(
+        graph=graph,
+        collector=collector,
+        enricher=enricher,
+        max_turns=args.max_turns,
+        limit_per_category=args.limit_per_category,
+    )
+
+    try:
+        await graph.build_indices_and_constraints()
+        await agent.run(args.region, districts, categories)
+    finally:
+        await graph.close()
+
 
 if __name__ == "__main__":
+    if os.name == "nt":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())

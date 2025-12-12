@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import sys
 from typing import List, Optional, Any
 
 from fastapi import FastAPI, HTTPException, Query
@@ -13,12 +14,16 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 
+# Allow same-directory imports without package prefix (e.g., `import models`).
+BASE_DIR = os.path.dirname(__file__)
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
 from graphiti_core import Graphiti
-from .kakao_data_collector import KakaoDataCollector
-from .llm_response import LLMResponse
-from . import graphiti_agent as graph_agent
-from .models import (
+from kakao_data_collector import KakaoDataCollector
+from llm_response import LLMResponse
+import graphiti_agent as graph_agent
+from models import (
     CategoryGroupCode,
     DaumBlogResult,
     DaumCafeResult,
@@ -32,13 +37,17 @@ from .models import (
     ScheduleResult,
     ScheduleRequest,
     UserRequest,
+    ExtractAgentRequest,
+    ExtractAgentResponse,
 )
-from .orchestrator_components import build_orchestrator
+from orchestrator_components import build_orchestrator
+from extraction_agent import run_extraction_agent
+
 
 
 logger = logging.getLogger(__name__)
 collector = KakaoDataCollector()
-kanana_client = LLMResponse(model="kanana-2-30b")
+kanana_client = LLMResponse()
 orchestrator = build_orchestrator()
 graph_client: Graphiti | None = None
 
@@ -92,7 +101,7 @@ def _validate_inputs(region: str, district: str, categories: List[str]) -> None:
 
 
 def _ensure_llm_key() -> None:
-    if not kanana_client.api_key:
+    if not kanana_client.kanana_api_key:
         raise HTTPException(status_code=500, detail="KANANA_API_KEY is not configured.")
 
 
@@ -193,20 +202,6 @@ def _collect_daum_contents(query: str, sort: str, page: int, size: int) -> tuple
     combined = "\n\n".join(contents).strip()
     return combined, source_counts
 
-
-def _edge_to_dict(edge: Any) -> dict:
-    fields = [
-        "fact",
-        "score",
-        "source_node_uuid",
-        "target_node_uuid",
-        "edge_uuid",
-        "edge_type",
-        "source_node_name",
-        "target_node_name",
-        "invalid_at",
-    ]
-    return {field: getattr(edge, field, None) for field in fields}
 
 
 @app.get("/regions")
@@ -444,24 +439,21 @@ async def extract_information(
     )
 
 
-@app.get("/graph/search")
-async def graph_search(
-    query: str = Query(..., description="Natural language query for Graph RAG search."),
-    limit: int = Query(5, ge=1, le=20, description="(unused) kept for backward compatibility."),
-    center_node_uuid: Optional[str] = Query(None, description="(unused) kept for backward compatibility."),
-):
-    """Run the LangGraph-based agent demo and return its conversation transcript."""
+@app.post("/extract/agent", response_model=ExtractAgentResponse)
+async def extract_agent(body: ExtractAgentRequest):
+    """Agentic extractor: 기본 검색 후 부족 필드를 키워드 확장 검색으로 채운다."""
+    _ensure_llm_key()
     try:
-        if graph_agent.graphiti_client is None:
-            await graph_agent.init_client()
-        transcript = await graph_agent.run_custom_agent_demo(query)
+        result = await run_in_threadpool(run_extraction_agent, body)
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("Graph agent run failed.")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.exception("Agentic extract failed.")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return result
 
-    return {"query": query, "transcript": transcript}
+
+
 
 
 # ------------------------------
