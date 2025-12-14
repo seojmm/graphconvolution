@@ -69,7 +69,12 @@ class ExtractionService:
         prompt = (
             f"[쿼리]\n{query}\n\n"
             f"[연결된 contents]\n{combined_contents}\n\n"
-            "위 내용 중 쿼리와 동일한 장소에 관한 정보만 JSON으로 추출해."
+            "위 내용 중 쿼리와 동일한 장소에 관한 정보만 추출해서 JSON 형식으로 반환해."
+            # "항상 JSON 하나만 간결하게 반환합니다. "
+            # "사용자 메시지는 장소에 대한 검색 결과 텍스트이며 HTML 태그는 제거되어 있습니다. "
+            # "쿼리에 포함된 상호/주소와 직접 관련 없는 정보는 무시합니다. "
+            # "반드시 parking, breaktime, openingHours, closedDays, priceRange, menus, notes 키를 포함해 문자열로 채우고 "
+            # "정보가 없으면 빈 문자열을 넣습니다. 필요 시 유용한 추가 키를 더해도 되지만 JSON 외의 텍스트는 금지합니다."
         )
 
         # 동기 함수인 get_response를 비동기 루프에서 실행

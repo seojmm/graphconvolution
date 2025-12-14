@@ -1,4 +1,4 @@
-import logging
+﻿import logging
 import os
 from typing import Optional
 
@@ -35,11 +35,6 @@ class LLMResponse:
     def _system_prompt(self) -> str:
         return (
             "당신은 카카오에서 개발된 언어모델 카나나(Kanana)입니다. "
-            "항상 JSON 하나만 간결하게 반환합니다. "
-            "사용자 메시지는 장소에 대한 검색 결과 텍스트이며 HTML 태그는 제거되어 있습니다. "
-            "쿼리에 포함된 상호/주소와 직접 관련 없는 정보는 무시합니다. "
-            "반드시 parking, breaktime, openingHours, closedDays, priceRange, menus, notes 키를 포함해 문자열로 채우고 "
-            "정보가 없으면 빈 문자열을 넣습니다. 필요 시 유용한 추가 키를 더해도 되지만 JSON 외의 텍스트는 금지합니다."
         )
 
     def get_response(self, prompt: str, temperature: float = 0) -> str:

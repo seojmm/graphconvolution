@@ -9,7 +9,6 @@ from tools import DaumSearchTool
 
 logger = logging.getLogger(__name__)
 
-# 필수 추출 필드
 REQUIRED_FIELDS = [
     "parking",
     "breaktime",
@@ -20,15 +19,14 @@ REQUIRED_FIELDS = [
     "notes",
 ]
 
-# 필드별 집중 검색 키워드
 KEYWORD_MAP = {
     "parking": ["주차", "주차장", "주차 가능"],
-    "breaktime": ["브레이크타임", "쉬는시간"],
-    "openingHours": ["영업시간", "오픈시간", "운영시간"],
-    "closedDays": ["휴무일", "정기휴무", "휴무"],
-    "priceRange": ["가격대", "가격", "인당가격"],
-    "menus": ["메뉴", "대표메뉴", "시그니처"],
-    "notes": ["특이사항", "비고", "기타정보"],
+    "breaktime": ["브레이크타임", "휴게시간"],
+    "openingHours": ["영업시간", "오픈시간", "영업 시간"],
+    "closedDays": ["휴무", "정기휴무", "휴일"],
+    "priceRange": ["가격", "가격대", "금액대"],
+    "menus": ["메뉴", "추천메뉴", "시그니처"],
+    "notes": ["특이사항", "비고", "참고"],
 }
 
 NOISE_PHRASES = {"없음", "정보없음", "미상"}
@@ -119,7 +117,7 @@ class PlaceEnrichmentAgent:
             body.place or "",
             body.address or "",
             body.query or "",
-            "주차 영업시간 메뉴 가격대 브레이크타임 휴무",
+            "주차 브레이크타임 영업시간 휴무 가격대 메뉴 비고",
         ]
         return " ".join(t for t in tokens if t).strip()
 
@@ -133,13 +131,14 @@ class PlaceEnrichmentAgent:
         ).strip()
 
     def _build_prompt(self, body: ExtractAgentRequest, combined_contents: str) -> str:
+        contents = combined_contents[:3000]  # 길이 제한으로 JSON 깨짐 방지
         return (
-            "다음 검색 결과를 활용해 장소의 세부 정보를 JSON 하나로만 반환하세요.\n"
-            "필수 키: parking, breaktime, openingHours, closedDays, priceRange, menus, notes "
-            "(모두 문자열, 없으면 빈 문자열). 필요한 경우 유용한 추가 키를 포함할 수 있습니다.\n"
+            "오직 하나의 JSON 객체만 반환하세요. 코드블록/설명/자연어 금지.\n"
+            "키: parking, breaktime, openingHours, closedDays, priceRange, menus, notes\n"
+            '모든 값은 문자열, 정보 없으면 빈 문자열 "" 로 설정. 추가 키 금지.\n'
             f"## 장소\n{body.place or ''} / {body.address or ''}\n\n"
             f"## 쿼리\n{body.query}\n\n"
-            f"## 검색결과\n{combined_contents}\n"
+            f"## 검색결과\n{contents}\n"
         )
 
     def run(self, body: ExtractAgentRequest) -> ExtractAgentResponse:

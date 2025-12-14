@@ -16,28 +16,53 @@ from graphiti_core.nodes import EpisodeType
 from graphiti_core.llm_client.config import LLMConfig
 from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
 
+class SafeOpenAIGenericClient(OpenAIGenericClient):
+    """OpenAI client with defensive JSON parsing to avoid hard failures on malformed responses."""
+
+    def _safe_json_loads(self, text: str) -> Dict[str, Any]:
+        try:
+            result = json.loads(text)
+        except json.JSONDecodeError:
+            start = text.find("{")
+            end = text.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                        result = json.loads(text[start : end + 1])
+                        # fall through to post-processing
+                except Exception:
+                    pass
+            logger.warning(
+                "Failed to parse LLM JSON; returning empty dict.",
+                extra={"preview": text[:500]},
+            )
+            result = {}
+
+        if isinstance(result, dict) and "extracted_entities" not in result:
+            result["extracted_entities"] = []
+        return result
+
+    async def _generate_response(
+        self,
+        messages: list,
+        response_model: Any | None = None,
+        max_tokens: int = 1024,
+        model_size: Any = None,
+    ) -> Dict[str, Any]:
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model or "gpt-4.1-mini",
+                messages=[{"role": m.role, "content": getattr(m, "content", "")} for m in messages],
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                response_format={"type": "json_object"},
+            )
+            raw = response.choices[0].message.content or ""
+            return self._safe_json_loads(raw)
+        except Exception:
+            logger.warning("LLM response failed or JSON decode failed; returning empty dict.", exc_info=True)
+            return {}
+
 from kakao_data_collector import KakaoDataCollector
-from extraction_agent import PlaceEnrichmentAgent
-from models import (
-    PlaceEntity,
-    PhoneEntity,
-    ParkingEntity,
-    BreaktimeEntity,
-    OpeningHoursEntity,
-    ClosedDaysEntity,
-    MenuEntity,
-    NoteEntity,
-    PriceRangeEntity,
-    HasPhone,
-    HasParking,
-    HasBreaktime,
-    HasOpeningHours,
-    HasClosedDays,
-    HasMenu,
-    HasNote,
-    HasPriceRange,
-    ExtractAgentRequest,
-)
 
 LOG_FILE = os.path.join(os.path.dirname(__file__), "graphiti_agent.log")
 
@@ -54,39 +79,39 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Custom entity/edge registrations sourced from models.py
-entity_types = {
-    "Place": PlaceEntity,
-    "Phone": PhoneEntity,
-    "Parking": ParkingEntity,
-    "Breaktime": BreaktimeEntity,
-    "OpeningHours": OpeningHoursEntity,
-    "ClosedDays": ClosedDaysEntity,
-    "Menu": MenuEntity,
-    "Note": NoteEntity,
-    "PriceRange": PriceRangeEntity,
-}
+# entity_types = {
+#     "Place": PlaceEntity,
+#     "Phone": PhoneEntity,
+#     "Parking": ParkingEntity,
+#     "Breaktime": BreaktimeEntity,
+#     "OpeningHours": OpeningHoursEntity,
+#     "ClosedDays": ClosedDaysEntity,
+#     "Menu": MenuEntity,
+#     "Note": NoteEntity,
+#     "PriceRange": PriceRangeEntity,
+# }
 
-edge_types = {
-    "HAS_PHONE": HasPhone,
-    "HAS_PARKING": HasParking,
-    "HAS_BREAKTIME": HasBreaktime,
-    "HAS_OPENING_HOURS": HasOpeningHours,
-    "HAS_CLOSED_DAYS": HasClosedDays,
-    "HAS_MENU": HasMenu,
-    "HAS_NOTE": HasNote,
-    "HAS_PRICE_RANGE": HasPriceRange,
-}
+# edge_types = {
+#     "HAS_PHONE": HasPhone,
+#     "HAS_PARKING": HasParking,
+#     "HAS_BREAKTIME": HasBreaktime,
+#     "HAS_OPENING_HOURS": HasOpeningHours,
+#     "HAS_CLOSED_DAYS": HasClosedDays,
+#     "HAS_MENU": HasMenu,
+#     "HAS_NOTE": HasNote,
+#     "HAS_PRICE_RANGE": HasPriceRange,
+# }
 
-edge_type_map = {
-    ("Place", "Phone"): ["HAS_PHONE"],
-    ("Place", "Parking"): ["HAS_PARKING"],
-    ("Place", "Breaktime"): ["HAS_BREAKTIME"],
-    ("Place", "OpeningHours"): ["HAS_OPENING_HOURS"],
-    ("Place", "ClosedDays"): ["HAS_CLOSED_DAYS"],
-    ("Place", "Menu"): ["HAS_MENU"],
-    ("Place", "Note"): ["HAS_NOTE"],
-    ("Place", "PriceRange"): ["HAS_PRICE_RANGE"],
-}
+# edge_type_map = {
+#     ("Place", "Phone"): ["HAS_PHONE"],
+#     ("Place", "Parking"): ["HAS_PARKING"],
+#     ("Place", "Breaktime"): ["HAS_BREAKTIME"],
+#     ("Place", "OpeningHours"): ["HAS_OPENING_HOURS"],
+#     ("Place", "ClosedDays"): ["HAS_CLOSED_DAYS"],
+#     ("Place", "Menu"): ["HAS_MENU"],
+#     ("Place", "Note"): ["HAS_NOTE"],
+#     ("Place", "PriceRange"): ["HAS_PRICE_RANGE"],
+# }
 
 
 def ensure_env() -> None:
@@ -147,6 +172,24 @@ def _parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
+def _as_str(val):
+    if val is None:
+        return None
+    if isinstance(val, (dict, list)):
+        return json.dumps(val, ensure_ascii=False)
+    return str(val)
+
+def _coerce_body_scalars(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure all episode body values are Neo4j-friendly primitives (str/number/bool/None)."""
+    safe: Dict[str, Any] = {}
+    for k, v in body.items():
+        if v is None or isinstance(v, (str, int, float, bool)):
+            safe[k] = v
+        elif isinstance(v, (dict, list)):
+            safe[k] = json.dumps(v, ensure_ascii=False)
+        else:
+            safe[k] = str(v)
+    return safe
 
 class GraphitiUpserter:
     """Handles upsert semantics against Graphiti by linking to prior episodes when present."""
@@ -174,7 +217,7 @@ class GraphitiUpserter:
                     break  # keep only the most recent match to limit prompt size
         return list(dict.fromkeys(uuids))[:1]
 
-    def _build_episode_body(self, place: Dict[str, Any], enriched: Dict[str, Any]) -> str:
+    def _build_episode_body(self, place: Dict[str, Any]) -> str:
         body = {
             "place_name": place.get("placeName") or place.get("name") or "",
             "address": place.get("addressName", ""),
@@ -196,27 +239,15 @@ class GraphitiUpserter:
             "collected_at": datetime.now(timezone.utc).isoformat(),
         }
 
-        if isinstance(enriched, dict):
-            body.update(
-                {
-                    "parking_status": enriched.get("parking"),
-                    "breaktime": enriched.get("breaktime"),
-                    "opening_hours": enriched.get("openingHours"),
-                    "closed_days": enriched.get("closedDays"),
-                    "price_range": enriched.get("priceRange"),
-                    "menus": enriched.get("menus"),
-                    "notes": enriched.get("notes"),
-                }
-            )
-        return json.dumps(body, ensure_ascii=False)
+        safe_body = _coerce_body_scalars(body)
+        return json.dumps(safe_body, ensure_ascii=False)
 
     async def upsert_place(
         self,
         place: Dict[str, Any],
-        enriched: Dict[str, Any],
         description: str,
     ) -> None:
-        payload = self._build_episode_body(place, enriched)
+        payload = self._build_episode_body(place)
         previous_uuids = await self._find_previous_episode_uuids(
             place_name=place.get("placeName") or place.get("name") or "",
             address=place.get("roadAddressName") or place.get("addressName"),
@@ -228,9 +259,6 @@ class GraphitiUpserter:
             source=EpisodeType.json,
             source_description=description,
             reference_time=datetime.now(timezone.utc),
-            entity_types=entity_types,
-            edge_types=edge_types,
-            edge_type_map=edge_type_map,
             previous_episode_uuids=(previous_uuids[:1] if previous_uuids else None),
         )
         print(f"Upserted place: {place.get('placeName')} ({len(previous_uuids)} previous episodes linked)")
@@ -243,13 +271,11 @@ class KakaoGraphitiAgent:
         self,
         graph: Graphiti,
         collector: KakaoDataCollector,
-        enricher: PlaceEnrichmentAgent,
         max_turns: int = 3,
         limit_per_category: Optional[int] = None,
     ):
         self.graph = graph
         self.collector = collector
-        self.enricher = enricher
         self.max_turns = max_turns
         self.limit_per_category = limit_per_category if limit_per_category and limit_per_category > 0 else None
         self.upserter = GraphitiUpserter(graph)
@@ -280,19 +306,6 @@ class KakaoGraphitiAgent:
         logger.info("Collected all districts", extra={"total": len(all_places)})
         return all_places
 
-    async def _enrich_place(self, place: Dict[str, Any]) -> Dict[str, Any]:
-        agent_req = ExtractAgentRequest(
-            query="주차, 브레이크타임, 영업시간, 휴무일, 가격대, 메뉴, 비고 정보",
-            place=place.get("placeName") or place.get("name"),
-            address=place.get("roadAddressName") or place.get("addressName"),
-            region=place.get("region"),
-            district=place.get("district"),
-            category=place.get("category"),
-            maxTurns=self.max_turns,
-            size=self.enricher.base_size,
-        )
-        result = await asyncio.to_thread(self.enricher.run, agent_req)
-        return result.llmResult if isinstance(result.llmResult, dict) else {}
 
     async def run(
         self,
@@ -302,12 +315,10 @@ class KakaoGraphitiAgent:
     ) -> None:
         places = self._collect_places(region, districts, categories)
         for place in places:
-            enriched = await self._enrich_place(place)
             description = (
-                f"kakao:{region}/{place.get('district')}:{place.get('category')} + kanana agent enrichment"
+                f"kakao:{region}/{place.get('district')}:{place.get('category')}"
             )
-            await self.upserter.upsert_place(place, enriched, description)
-
+            await self.upserter.upsert_place(place, None, description)
 
 graphiti_client: Graphiti | None = None  # compatibility for FastAPI /graph/search endpoint
 
@@ -347,16 +358,12 @@ async def main() -> None:
         os.environ["NEO4J_URI"],
         os.environ["NEO4J_USERNAME"],
         os.environ["NEO4J_PASSWORD"],
-        llm_client=OpenAIGenericClient(config=llm_config, max_tokens=llm_max_tokens),
+        llm_client=SafeOpenAIGenericClient(config=llm_config, max_tokens=llm_max_tokens),
     )
-    enricher = PlaceEnrichmentAgent(
-        base_size=args.base_size,
-        follow_up_size=args.follow_up_size,
-    )
+
     agent = KakaoGraphitiAgent(
         graph=graph,
         collector=collector,
-        enricher=enricher,
         max_turns=args.max_turns,
         limit_per_category=args.limit_per_category,
     )

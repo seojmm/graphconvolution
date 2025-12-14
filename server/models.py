@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from enum import Enum
 
 # ---------- API response models ----------
@@ -195,6 +195,7 @@ class Metrics(BaseModel):
 
 
 class MeetingCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     id: str
     request_id: str
     place_name: str

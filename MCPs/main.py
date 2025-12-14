@@ -1,6 +1,14 @@
 # main.py
 
+import os
+import sys
 from fastapi import FastAPI
+
+# Ensure MCPs/App is importable so `Domain`, `agents`, `ports`, `orchestrator` work
+# when running `uvicorn MCPs.main:app` from the repo root.
+APP_DIR = os.path.join(os.path.dirname(__file__), "App")
+if APP_DIR not in sys.path:
+    sys.path.insert(0, APP_DIR)
 
 # Domain 모델
 from Domain.model import (

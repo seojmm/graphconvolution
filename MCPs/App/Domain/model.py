@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 from typing import List, Optional, Dict
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class DateRange(BaseModel):
@@ -78,6 +81,7 @@ class Metrics(BaseModel):
 
 
 class MeetingCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     # 식별자 계층
     id: str               # = MeetingCandidate 하이퍼엣지 ID
     request_id: str       # 같은 질의에서 생성된 후보를 묶는 ID
@@ -88,7 +92,7 @@ class MeetingCandidate(BaseModel):
     address: str
     timeslot_id: Optional[str] = None
     area_id: Optional[str] = None
-    attendee_pids: List[str] = []
+    attendee_pids: List[str] = Field(default_factory=list)
 
     # 시간/라이프사이클
     start_time: str            # ISO

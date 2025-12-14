@@ -55,6 +55,7 @@ class InMemoryMeetingRepository:
 
     def search_candidates(self, constraints: Constraints) -> List[MeetingCandidate]:
         results: List[MeetingCandidate] = []
+        request_id = str(uuid.uuid4())
         max_budget = constraints.budget_per_person.max
         areas = constraints.area or []
 
@@ -70,7 +71,7 @@ class InMemoryMeetingRepository:
 
             candidate = MeetingCandidate(
                 id=f"c_{idx}",
-                request_id=str(uuid.uuid4()),
+                request_id=request_id,
                 place_name=p["place_name"],
                 place_id=p["place_id"],
                 address=p["address"],

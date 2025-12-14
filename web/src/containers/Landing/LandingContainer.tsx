@@ -1,20 +1,19 @@
-﻿"use client";
+"use client";
 
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 const LandingContainer = () => {
-  const router = useRouter();
-
   return (
     <div className="flex h-full items-center justify-center bg-white">
-      <button
-        onClick={() => router.push("/chat")}
+      <Link
+        href="/chat"
         className="px-6 py-3 rounded-full bg-[#ffeb3b] text-[#1f1f1f] font-semibold shadow hover:brightness-95"
       >
         채팅으로 이동
-      </button>
+      </Link>
     </div>
   );
 };
 
 export default LandingContainer;
+

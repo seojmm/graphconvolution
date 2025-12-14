@@ -30,11 +30,11 @@ class DummyCalenderGateway(CalenderGateway):
         attendees: Optional[List[str]] = None,
     ) -> ScheduleResult:
         # 간단히 문자열 기반 event_id 생성
-        event_id = f"evt_{candidate.candidate_id}"
+        event_id = f"evt_{candidate.id}"
         return ScheduleResult(
             status="mocked",
             event_id=event_id,
-            candidate_id=candidate.candidate_id,
+            candidate_id=candidate.id,
         )
 
 

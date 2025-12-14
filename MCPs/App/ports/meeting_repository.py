@@ -4,6 +4,7 @@
 
 from abc import ABC, abstractmethod
 from typing import List
+import uuid
 
 from Domain.model import Constraints, MeetingCandidate
 
@@ -45,6 +46,7 @@ class InMemoryMeetingRepository(MeetingRepository):
     def search_candidates(self, constraints: Constraints) -> List[MeetingCandidate]:
         # 아주 단순한 더미 필터: 예산/지역을 대충 보는 정도
         results: List[MeetingCandidate] = []
+        request_id = str(uuid.uuid4())
 
         max_budget = constraints.budget_per_person.max
         areas = constraints.area or []
@@ -61,7 +63,8 @@ class InMemoryMeetingRepository(MeetingRepository):
             end_time = constraints.time_range.end_time or "21:00"
 
             candidate = MeetingCandidate(
-                candidate_id=f"c_{idx}",
+                id=f"c_{idx}",
+                request_id=request_id,
                 place_name=p["place_name"],
                 place_id=p["place_id"],
                 address=p["address"],

@@ -63,3 +63,4 @@ class DaumSearchTool:
             "blog": self._request("/v2/search/blog", params),
             "cafe": self._request("/v2/search/cafe", params),
         }
+

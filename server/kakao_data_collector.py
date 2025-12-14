@@ -17,7 +17,6 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler("kakao_data_collection.log", encoding="utf-8"),
         logging.StreamHandler(),
     ],
 )
@@ -31,10 +30,10 @@ class KakaoDataCollector:
             "seoul": {
                 "name": "서울",
                 "districts": [
-                    # "강남구",
-                    # "강동구",
-                    # "강북구",
-                    # "강서구",
+                    "강남구",
+                    "강동구",
+                    "강북구",
+                    "강서구",
                     "관악구",
                     "광진구",
                     "구로구",
