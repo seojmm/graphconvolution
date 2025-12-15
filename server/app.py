@@ -1,6 +1,7 @@
 """FastAPI service that proxies Kakao Map place searches."""
 
 from datetime import datetime
+import asyncio
 import html
 import json
 import logging
@@ -21,6 +22,11 @@ BASE_DIR = os.path.dirname(__file__)
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+# Also allow importing sibling packages (e.g., `MCPs`) when running `python server/main.py`.
+REPO_ROOT = os.path.dirname(BASE_DIR)
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 from graphiti_core import Graphiti
 from kakao_data_collector import KakaoDataCollector
 from llm_response import LLMResponse
@@ -35,14 +41,16 @@ from models import (
     KakaoPlace,
     PlaceData,
     PlacesResponse,
-    OrchestratorResult,
-    ScheduleResult,
-    ScheduleRequest,
-    UserRequest,
     ExtractAgentRequest,
     ExtractAgentResponse,
 )
-from orchestrator_components import build_orchestrator
+from MCPs.App.Domain.model import (
+    OrchestratorResult as MCPOrchestratorResult,
+    MeetingCandidate as MCPMeetingCandidate,
+    ScheduleRequest as MCPScheduleRequest,
+    ScheduleResult as MCPScheduleResult,
+    UserRequest as MCPUserRequest,
+)
 from extraction_agent import run_extraction_agent
 
 
@@ -50,7 +58,6 @@ from extraction_agent import run_extraction_agent
 logger = logging.getLogger(__name__)
 collector = KakaoDataCollector()
 kanana_client = LLMResponse()
-orchestrator = build_orchestrator()
 graph_client: Graphiti | None = None
 
 app = FastAPI(title="Kakao Places Proxy", version="0.1.0")
@@ -88,6 +95,274 @@ class ChatResponse(BaseModel):
     meta: dict | None = None
 
 
+class MemoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class KananaQARequest(BaseModel):
+    user_query: str
+    memory: List[MemoryMessage] = []
+    user_id: str = "web"
+
+
+class KananaQAResponse(BaseModel):
+    reply: str
+    memory: List[MemoryMessage]
+    candidates: Optional[List[MCPMeetingCandidate]] = None
+    orchestrator: Optional[MCPOrchestratorResult] = None
+    suggestions: Optional[List[str]] = None
+
+
+_mcp_orchestrator = None
+
+
+BOT_PURPOSE = "충분한 제약조건을 입력받아 약속 장소를 추천해주는 챗봇"
+
+
+def _looks_like_meeting_place_query(text: str) -> bool:
+    lowered = (text or "").lower()
+    keywords = [
+        "약속",
+        "만날",
+        "모임",
+        "회식",
+        "데이트",
+        "장소",
+        "추천",
+        "맛집",
+        "식당",
+        "카페",
+        "어디",
+        "중간",
+        "역",
+        "지역",
+        "인원",
+        "명",
+        "예산",
+        "가격",
+        "시간",
+        "날짜",
+        "주차",
+    ]
+    return any(k in lowered for k in keywords)
+
+
+def _user_said_no_preference(text: str) -> bool:
+    lowered = (text or "").lower().replace(" ", "")
+    phrases = [
+        "상관없",
+        "아무거나",
+        "다괜찮",
+        "상관없다고",
+        "신경안써",
+        "알아서",
+    ]
+    return any(p in lowered for p in phrases)
+
+
+def _count_mentions_in_memory(memory: List[MemoryMessage], needles: List[str], role: str) -> int:
+    count = 0
+    for msg in memory or []:
+        if msg.role != role:
+            continue
+        content = msg.content or ""
+        if any(n in content for n in needles):
+            count += 1
+    return count
+
+
+def _build_kanana_behavior_notes(user_query: str, memory: List[MemoryMessage]) -> str:
+    notes: List[str] = []
+
+    if _user_said_no_preference(user_query):
+        notes.append("사용자가 '상관없어/아무거나'라고 말한 항목은 기본값으로 가정하고 다시 묻지 말 것.")
+        notes.append("추가 질문 대신, 현재까지 정보로 3개 후보를 먼저 제안할 것.")
+
+    asked_budget = _count_mentions_in_memory(memory, ["예산", "1인", "만원", "가격"], role="assistant")
+    asked_parking = _count_mentions_in_memory(memory, ["주차"], role="assistant")
+    asked_vibe = _count_mentions_in_memory(memory, ["조용", "활기", "분위기"], role="assistant")
+
+    if asked_budget + asked_parking + asked_vibe >= 2:
+        notes.append("같은 질문을 반복하지 말고, 현재까지 정보로 우선 추천을 제시할 것.")
+
+    return "\n".join(f"- {n}" for n in notes).strip()
+
+
+def _extract_first_json_object_relaxed(text: str) -> dict | None:
+    parsed = _extract_first_json_object(text)
+    if parsed is not None:
+        return parsed
+    if not text:
+        return None
+    try:
+        candidate = json.loads(text)
+    except Exception:
+        return None
+    return candidate if isinstance(candidate, dict) else None
+
+
+def _build_orchestrate_readiness_prompt(user_query: str, memory: List[MemoryMessage], limit: int = 20) -> str:
+    trimmed = memory[-limit:] if memory else []
+    lines: List[str] = []
+    for msg in trimmed:
+        role = "사용자" if msg.role == "user" else "어시스턴트"
+        content = (msg.content or "").strip()
+        if content:
+            lines.append(f"{role}: {content}")
+    memory_text = "\n".join(lines).strip()
+
+    return (
+        f"당신은 {BOT_PURPOSE}입니다.\n"
+        "지금까지의 대화를 보고, 장소 추천을 바로 진행해도 될지 판단하세요.\n\n"
+        "반드시 JSON 1개만 반환하세요(코드블록/설명 금지).\n"
+        "스키마:\n"
+        "{\n"
+        '  "ready": true|false,\n'
+        '  "missing": ["지역/역", "날짜/시간대", "인원", "예산(1인)", "종류(식당/카페)"],\n'
+        '  "assembled_user_query": "오케스트레이터(/orchestrate)에 전달할 자연어 쿼리"\n'
+        "}\n\n"
+        "규칙:\n"
+        "- ready=true: 최소한 지역/역(또는 출발지), 인원, 종류(식당/카페)가 확보됐고 추천을 시작할 수 있을 때.\n"
+        "- 사용자가 '상관없어/아무거나'라고 말한 항목은 missing에 넣지 말 것.\n"
+        "- assembled_user_query에는 지금까지의 선호(예: 딸기 디저트, 조용하게, 강남역 근처)를 자연스럽게 포함.\n\n"
+        f"대화 기록:\n{memory_text if memory_text else '(없음)'}\n\n"
+        f"이번 사용자 메시지:\n{user_query}\n"
+    )
+
+
+def _format_candidates_for_reply(candidates: List[MCPMeetingCandidate]) -> str:
+    lines: List[str] = []
+    for idx, cand in enumerate(candidates[:3], start=1):
+        price = f" · 1인 {cand.estimated_price_per_person}원" if cand.estimated_price_per_person else ""
+        lines.append(f"{idx}. {cand.place_name} ({cand.address}){price}")
+    return "\n".join(lines).strip()
+
+
+def _memory_contains_text(memory: List[MemoryMessage], text: str) -> bool:
+    target = (text or "").strip()
+    if not target:
+        return False
+    return any((m.content or "").strip() == target for m in (memory or []))
+
+
+def _build_demo_candidates(time_label: str) -> List[MCPMeetingCandidate]:
+    base_date = "2025-12-19"  # 데모용 고정 (이번 주 금요일)
+    start_time = f"{base_date}T{time_label}:00+09:00"
+    end_hour, end_min = time_label.split(":")
+    end_time = f"{base_date}T{end_hour}:{end_min}:00+09:00"
+
+    demo = [
+        ("안남숯불", "서울 강남구 테헤란로24길 31"),
+        ("서진식당", "서울 강남구 테헤란로84길 33"),
+        ("퇴벤돈까스", "서울 강남구 테헤란로 124"),
+        ("강남밥상 강남역점", "서울 서초구 서초대로77길 24"),
+        ("닭터홈 강남본점", "서울 강남구 역삼로3길 17"),
+        ("감성타코 강남역점", "서울 강남구 강남대로 406"),
+        ("딘타이펑 강남점", "서울 서초구 서초대로73길 12"),
+        ("이대비엔나식당", "서울 강남구 사평대로52길 13"),
+        ("강남부칼국수", "서울 서초구 서초대로74길 23"),
+        ("마라공방 강남역점", "서울 강남구 강남대로84길 6"),
+    ]
+
+    candidates: List[MCPMeetingCandidate] = []
+    for idx, (name, address) in enumerate(demo, start=1):
+        candidates.append(
+            MCPMeetingCandidate(
+                id=f"demo_{idx}",
+                request_id="demo_req",
+                place_name=name,
+                place_id=f"demo_place_{idx}",
+                address=address,
+                start_time=start_time,
+                end_time=end_time,
+                estimated_price_per_person=18000,
+                reasoning="demo",
+            )
+        )
+    return candidates
+
+
+def _redirect_to_purpose_reply(user_query: str) -> str:
+    snippet = (user_query or "").strip()
+    if snippet:
+        snippet = snippet[:80]
+    return (
+        "좋아요. 그럼 그걸 약속에 반영해서 장소를 잡아볼게요.\n"
+        "어느 지역/역에서 만날까요? 그리고 몇 명이에요?\n"
+        "예: “오늘 저녁 7시 강남역, 2명, 1인 2만원, 영화관 근처에서”"
+    )
+
+
+def _get_mcp_orchestrator():
+    global _mcp_orchestrator
+    if _mcp_orchestrator is not None:
+        return _mcp_orchestrator
+
+    from dotenv import load_dotenv
+
+    load_dotenv(".env.local")
+
+    from MCPs.App.agents.action_agent import ActionAgent
+    from MCPs.App.agents.constraint_extraction import ConstraintExtractionAgent
+    from MCPs.App.agents.knowledge_agent import KnowledgeAgent
+    from MCPs.App.agents.planning_agent import PlanningAgent
+    from MCPs.App.agents.verification_agent import VerificationAgent
+    from MCPs.App.orchestrator.orchestrator import Orchestrator
+    from MCPs.App.ports.calender_gateway import KakaoCalenderGateway, KakaoMemoChatGateway, KakaoMapGateway
+    from MCPs.App.ports.eta_service import KakaoMapEtaService
+    from MCPs.App.ports.meeting_repository import InMemoryMeetingRepository
+    from MCPs.App.ports.midpoint_service import KakaoMapMidpointService
+    from MCPs.kakao_mcp import PlayMCPClient
+    from MCPs.tools.mcp_tools import set_mcp_client
+
+    play_mcp_toolbox_url = (
+        os.getenv("PLAY_MCP_ENDPOINT")
+        or os.getenv("PLAY_MCP_TOOLBOX_URL")
+        or "https://playmcp.kakao.com/mcp"
+    )
+
+    constraint_agent = ConstraintExtractionAgent()
+    meeting_repo = InMemoryMeetingRepository()
+    knowledge_agent = KnowledgeAgent(meeting_repository=meeting_repo)
+    verification_agent = VerificationAgent(eta_service=KakaoMapEtaService())
+
+    talk_calender_client = PlayMCPClient(base_url=play_mcp_toolbox_url or "")
+    try:
+        talk_calender_client.initialize(client_name="graphconvolution", client_version="0.1.0")
+        logger.info("PlayMCP initialize completed.")
+    except Exception as exc:
+        logger.warning("PlayMCP initialize failed: %s", exc)
+
+    set_mcp_client(talk_calender_client)
+
+    calender_gateway = KakaoCalenderGateway(talk_calender_client=talk_calender_client)
+    memo_gateway = KakaoMemoChatGateway(client=talk_calender_client)
+    map_gateway = KakaoMapGateway(client=talk_calender_client)
+    action_agent = ActionAgent(
+        calender_gateway=calender_gateway,
+        memo_gateway=memo_gateway,
+        map_gateway=map_gateway,
+        llm=getattr(constraint_agent, "llm", None),
+    )
+
+    kakao_rest_key = os.getenv("KAKAO_REST_API_KEY")
+    midpoint_service = KakaoMapMidpointService(rest_api_key=kakao_rest_key) if kakao_rest_key else None
+
+    planning_agent = PlanningAgent(
+        constraint_agent=constraint_agent,
+        knowledge_agent=knowledge_agent,
+        verification_agent=verification_agent,
+        midpoint_service=midpoint_service,
+    )
+
+    _mcp_orchestrator = Orchestrator(
+        planning_agent=planning_agent,
+        action_agent=action_agent,
+    )
+    return _mcp_orchestrator
+
+
 def _extract_first_json_object(text: str) -> dict | None:
     if not text:
         return None
@@ -115,6 +390,60 @@ def _format_history_for_prompt(history: List[ChatHistoryMessage], limit: int = 8
         if content:
             lines.append(f"{role}: {content}")
     return "\n".join(lines).strip()
+
+
+def _build_kanana_pivot_prompt(user_query: str, memory: List[MemoryMessage], limit: int = 20) -> str:
+    trimmed = memory[-limit:] if memory else []
+    lines: List[str] = []
+
+    for msg in trimmed:
+        role = "사용자" if msg.role == "user" else "어시스턴트"
+        content = (msg.content or "").strip()
+        if content:
+            lines.append(f"{role}: {content}")
+
+    memory_text = "\n".join(lines).strip()
+    behavior_notes = _build_kanana_behavior_notes(user_query, trimmed)
+    extra_rules = f"추가 규칙:\n{behavior_notes}\n\n" if behavior_notes else ""
+    return (
+        f"당신은 {BOT_PURPOSE}입니다.\n"
+        "사용자의 말이 약속 장소와 직접 관련이 없어도, 이를 '약속에서 하고 싶은 활동/분위기/선호'로 자연스럽게 해석해 이어가세요.\n\n"
+        "출력 규칙:\n"
+        "- 한국어로, 딱딱한 소개(예: “저는 ~챗봇입니다”)는 피하세요.\n"
+        "- 사용자의 말에 1문장 정도 공감/반응한 뒤, 약속 장소 추천을 위해 필요한 질문을 1~2개만 하세요.\n"
+        "- 질문은 선택지를 주듯이 짧게(예: “어느 지역에서?” “몇 명이에요?”).\n"
+        "- JSON/코드블록 금지.\n\n"
+        f"{extra_rules}"
+        f"대화 기록:\n{memory_text if memory_text else '(없음)'}\n\n"
+        f"이번 사용자 메시지:\n{user_query}\n"
+    )
+
+
+def _build_kanana_qa_prompt(user_query: str, memory: List[MemoryMessage], limit: int = 20) -> str:
+    trimmed = memory[-limit:] if memory else []
+    lines: List[str] = []
+
+    for msg in trimmed:
+        role = "사용자" if msg.role == "user" else "어시스턴트"
+        content = (msg.content or "").strip()
+        if content:
+            lines.append(f"{role}: {content}")
+
+    memory_text = "\n".join(lines).strip()
+    behavior_notes = _build_kanana_behavior_notes(user_query, trimmed)
+    extra_rules = f"추가 규칙:\n{behavior_notes}\n\n" if behavior_notes else ""
+    return (
+        f"당신은 {BOT_PURPOSE}입니다.\n"
+        "아래 '대화 기록'을 참고해서, '사용자 질문'에 자연스럽고 도움이 되게 답변하세요.\n"
+        "행동 원칙:\n"
+        "- 사용자의 질문이 약속 장소 추천과 무관하면, 이를 '약속에서 하고 싶은 활동/분위기/선호'로 자연스럽게 연결해서 1~2개만 추가 질문하세요.\n"
+        "- 약속 장소 추천과 관련 있으면, 대화 기록을 기반으로 이미 나온 제약조건은 재사용하고 부족한 것만 1~3개로 좁혀 질문하세요.\n"
+        "- 제약조건 예: 만날 지역/역(또는 출발지), 인원, 예산(1인), 날짜/시간, 카테고리(식당/카페), 주차/알레르기/제외 조건.\n"
+        "- 답변은 한국어, 너무 길게 쓰지 말고(최대 6문장), JSON/코드블록은 출력하지 마세요.\n\n"
+        f"{extra_rules}"
+        f"대화 기록:\n{memory_text if memory_text else '(없음)'}\n\n"
+        f"사용자 질문:\n{user_query}\n"
+    )
 
 
 def _agent_fallback(message: str) -> dict:
@@ -637,20 +966,26 @@ async def extract_agent(body: ExtractAgentRequest):
 
 
 # ------------------------------
-# MCP Orchestrator endpoints
+# MCP Orchestrator endpoints (unified)
 # ------------------------------
 
 
-@app.post("/orchestrate", response_model=OrchestratorResult)
-async def orchestrate(body: UserRequest):
+@app.post("/orchestrate", response_model=MCPOrchestratorResult)
+async def orchestrate(body: MCPUserRequest):
     """Plan meeting candidates using the MCP orchestrator."""
-    return orchestrator.plan(body)
+    orchestrator = await run_in_threadpool(_get_mcp_orchestrator)
+    return await run_in_threadpool(orchestrator.plan, body)
 
 
-@app.post("/schedule", response_model=ScheduleResult)
-async def schedule_meeting(body: ScheduleRequest):
-    """Schedule a selected meeting candidate (demo implementation)."""
-    return orchestrator.schedule(body.user_request, body.selected_candidate)
+@app.post("/schedule", response_model=MCPScheduleResult)
+async def schedule_meeting(body: MCPScheduleRequest):
+    """Schedule a selected meeting candidate via MCP tools (calendar/memo/map)."""
+    orchestrator = await run_in_threadpool(_get_mcp_orchestrator)
+    return await run_in_threadpool(
+        orchestrator.schedule,
+        user_request=body.user_request,
+        selected_candidate=body.selected_candidate,
+    )
 
 
 @app.on_event("startup")
@@ -763,6 +1098,116 @@ async def chat_router(body: ChatRequest):
     # general fallback
     reply = await run_in_threadpool(_general_chat_reply, body.message)
     return ChatResponse(intent=intent, reply=reply, meta={"mode": "general", "steps": ["intent_classify", "general_llm"]})
+
+
+@app.post("/kanana/qa", response_model=KananaQAResponse)
+async def kanana_qa(body: KananaQARequest):
+    _ensure_llm_key()
+
+    # Scripted demo flow:
+    # If the user asks the predefined query, wait 3 seconds then ask for time selection with buttons.
+    scripted_query = "이번 주 금요일 강남역 근처에서 4명이서 점심을 먹을거야. 가성비 맛집 추천해줘."
+    if (body.user_query or "").strip() == scripted_query:
+        await asyncio.sleep(3)
+        reply = "더 정확한 정보 제공을 위해서, 몇 시쯤에 가실 예정인가요?"
+        suggestions = ["11:00", "12:00", "13:00"]
+        updated_memory = list(body.memory or [])
+        updated_memory.append(MemoryMessage(role="user", content=body.user_query or ""))
+        updated_memory.append(MemoryMessage(role="assistant", content=reply))
+        return KananaQAResponse(reply=reply, memory=updated_memory, suggestions=suggestions)
+
+    # Scripted demo follow-up: time selection -> candidates list (clickable UI).
+    if (body.user_query or "").strip() in {"11:00", "12:00", "13:00"} and _memory_contains_text(
+        body.memory or [], scripted_query
+    ):
+        candidates: List[MCPMeetingCandidate] = []
+        result: MCPOrchestratorResult | None = None
+
+        try:
+            assembled_query = (
+                f"이번 주 금요일 {body.user_query}에 강남역 근처에서 4명이 점심을 먹을거야. 가성비 맛집 추천해줘."
+            )
+            orchestrator = await run_in_threadpool(_get_mcp_orchestrator)
+            result = await run_in_threadpool(
+                orchestrator.plan,
+                MCPUserRequest(user_query=assembled_query, user_id=body.user_id, participants=[]),
+            )
+            candidates = list(result.candidates or [])
+        except Exception:
+            result = None
+            candidates = []
+
+        if not candidates:
+            candidates = _build_demo_candidates((body.user_query or "").strip())
+
+        reply = f"총 {len(candidates)}곳을 찾았어요. 아래에서 원하는 곳을 눌러 선택해 주세요."
+        updated_memory = list(body.memory or [])
+        updated_memory.append(MemoryMessage(role="user", content=body.user_query or ""))
+        updated_memory.append(MemoryMessage(role="assistant", content=reply))
+        return KananaQAResponse(reply=reply, memory=updated_memory, candidates=candidates, orchestrator=result)
+
+    # Scripted demo follow-up: time selection -> orchestrate candidates list.
+    if (body.user_query or "").strip() in {"11:00", "12:00", "13:00"} and _memory_contains_text(
+        body.memory or [], scripted_query
+    ):
+        assembled_query = (
+            f"이번 주 금요일 {body.user_query}에 강남역 근처에서 4명이 점심을 먹을거야. 가성비 맛집 추천해줘."
+        )
+        orchestrator = await run_in_threadpool(_get_mcp_orchestrator)
+        result: MCPOrchestratorResult = await run_in_threadpool(
+            orchestrator.plan,
+            MCPUserRequest(user_query=assembled_query, user_id=body.user_id, participants=[]),
+        )
+        candidates = list(result.candidates or [])
+        reply = f"총 {len(candidates)}곳을 찾았어요. 아래에서 원하는 곳을 눌러 선택해 주세요."
+        updated_memory = list(body.memory or [])
+        updated_memory.append(MemoryMessage(role="user", content=body.user_query or ""))
+        updated_memory.append(MemoryMessage(role="assistant", content=reply))
+        return KananaQAResponse(reply=reply, memory=updated_memory, candidates=candidates, orchestrator=result)
+
+    if not _looks_like_meeting_place_query(body.user_query or ""):
+        try:
+            pivot_prompt = _build_kanana_pivot_prompt(body.user_query or "", body.memory or [])
+            reply = await run_in_threadpool(kanana_client.get_response, pivot_prompt, 0.4)
+        except Exception:
+            reply = _redirect_to_purpose_reply(body.user_query or "")
+        updated_memory = list(body.memory or [])
+        updated_memory.append(MemoryMessage(role="user", content=body.user_query or ""))
+        updated_memory.append(MemoryMessage(role="assistant", content=reply))
+        return KananaQAResponse(reply=reply, memory=updated_memory)
+
+    # If we have enough constraints, call the orchestrator and return candidates.
+    try:
+        readiness_prompt = _build_orchestrate_readiness_prompt(body.user_query or "", body.memory or [])
+        readiness_raw = await run_in_threadpool(kanana_client.get_response, readiness_prompt, 0.2)
+        readiness = _extract_first_json_object_relaxed(readiness_raw) or {}
+    except Exception:
+        readiness = {}
+
+    if isinstance(readiness, dict) and readiness.get("ready") is True:
+        assembled = readiness.get("assembled_user_query")
+        assembled_query = assembled.strip() if isinstance(assembled, str) else (body.user_query or "")
+        orchestrator = await run_in_threadpool(_get_mcp_orchestrator)
+        result: MCPOrchestratorResult = await run_in_threadpool(
+            orchestrator.plan,
+            MCPUserRequest(user_query=assembled_query, user_id=body.user_id, participants=[]),
+        )
+
+        candidates = list(result.candidates or [])
+        reply = f"총 {len(candidates)}곳을 찾았어요. 아래에서 원하는 곳을 눌러 선택해 주세요."
+
+        updated_memory = list(body.memory or [])
+        updated_memory.append(MemoryMessage(role="user", content=body.user_query or ""))
+        updated_memory.append(MemoryMessage(role="assistant", content=reply))
+        return KananaQAResponse(reply=reply, memory=updated_memory, candidates=candidates, orchestrator=result)
+
+    prompt = _build_kanana_qa_prompt(body.user_query or "", body.memory or [])
+    reply = await run_in_threadpool(kanana_client.get_response, prompt)
+
+    updated_memory = list(body.memory or [])
+    updated_memory.append(MemoryMessage(role="user", content=body.user_query or ""))
+    updated_memory.append(MemoryMessage(role="assistant", content=reply or ""))
+    return KananaQAResponse(reply=reply or "", memory=updated_memory)
 
 
 __all__ = ["app"]

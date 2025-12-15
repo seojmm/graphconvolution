@@ -4,6 +4,10 @@ const nextConfig = {
     if (dev) {
       config.cache = false;
     }
+    config.module.rules.push({ 
+        test: /\.svg$/,
+        use: ['@svgr/webpack'], 
+        }); 
     return config;
   },
 };

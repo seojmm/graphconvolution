@@ -22,7 +22,7 @@ const Footer = () => {
   if (pathname === "/") return null;
 
   return (
-    <footer className="absolute bottom-0 h-16 w-full border-t flex flex-row px-8 text-xs justify-between text-gray-700 pt-1">
+    <footer className="h-16 w-full border-t flex flex-row px-8 text-xs justify-between text-gray-700 pt-1">
         {/* <Link href="/" className="items-center focus:outline-none">
           <span
               className={`w-10 h-10 flex items-center justify-center ${

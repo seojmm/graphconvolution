@@ -1,7 +1,7 @@
 # Kakao/Daum FastAPI Service
 
 ## 구성
-- `app.py`: FastAPI 엔드포인트 (/health, /regions, /places, /kakao/*, /daum/*, /extract).
+- `app.py`: FastAPI 엔드포인트 (/health, /regions, /places, /kakao/*, /daum/*, /extract, /chat, /kanana/qa, /orchestrate, /schedule).
 - `kakao_data_collector.py`: Kakao 로컬 검색 수집기.
 - `models.py`: Pydantic 응답 모델.
 - `llm_response.py`: Kanana LLM 클라이언트 (/extract에서 사용).
